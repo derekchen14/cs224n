@@ -73,9 +73,6 @@ target/
 # pyenv
 .python-version
 
-# celery beat schedule file
-celerybeat-schedule
-
 # dotenv
 .env
 
@@ -92,3 +89,6 @@ ENV/
 
 #Data
 dirty/
+
+#Mac Stuff
+.DS_Store
