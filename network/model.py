@@ -6,6 +6,11 @@ import time
 from utils.general import Progbar, init_generator
 from utils.parser import minibatches, loader
 
+try:
+  from tensorflow.python.ops.rnn import dynamic_rnn
+except ImportError:
+  from tensorflow.nn.rnn import dynamic_rnn
+
 class Config(object):
   enc_len = 7
   dec_len = 8           # purposely different from enc to easily distinguish
@@ -32,49 +37,20 @@ class Seq2SeqModel(object):
 
   def add_feedforward(self):
     # weight_initializer = init_generator(self.initializer)
-    tf.contrib.layers.xavier_initializer
+    init_layer = tf.Variable(tf.contrib.layers.xavier_initializer)
 
-    enc_cell = tf.nn.rnn_cell.GRUCell(self.enc_len)
-    dec_cell = tf.nn.rnn_cell.GRUCell(self.dec_len)
+    with tf.variable_scope("seq2seq") as scope:
+      enc_cell = tf.nn.rnn_cell.GRUCell(self.enc_len)
+      dec_cell = tf.nn.rnn_cell.GRUCell(self.dec_len)
 
+      # _ refers to outputs, which are not useful in this model
+      _, enc_state = dynamic_rnn(enc_cell, inputs
+          sequence_length=None, initial_state=None, dtype=None)
+      simple_decoder_fn = simple_decoder_fn_train(enc_state)
+      outputs, dec_state, final_context = dynamic_rnn_decoder(dec_cell,
+        decoder_fn=simple_decoder_fn, inputs=None, sequence_length=None)
 
-def basic_rnn_seq2seq(encoder_inputs,
-                      decoder_inputs,
-                      cell,
-                      dtype=dtypes.float32,
-                      scope=None):
-  """Basic RNN sequence-to-sequence model.
-  This model first runs an RNN to encode encoder_inputs into a state vector,
-  then runs decoder, initialized with the last encoder state, on decoder_inputs.
-  Encoder and decoder use the same RNN cell type, but don't share parameters.
-  Args:
-    encoder_inputs: A list of 2D Tensors [batch_size x input_size].
-    decoder_inputs: A list of 2D Tensors [batch_size x input_size].
-    cell: core_rnn_cell.RNNCell defining the cell function and size.
-    dtype: The dtype of the initial state of the RNN cell (default: tf.float32).
-    scope: VariableScope for the created subgraph; default: "basic_rnn_seq2seq".
-  Returns:
-    A tuple of the form (outputs, state), where:
-      outputs: A list of the same length as decoder_inputs of 2D Tensors with
-        shape [batch_size x output_size] containing the generated outputs.
-      state: The state of each decoder cell in the final time-step.
-        It is a 2D Tensor of shape [batch_size x cell.state_size].
-  """
-
-    W_height = self.config.n_features * self.config.embed_size
-    W_width = self.config.hidden_size
-    U_height = self.config.hidden_size
-    U_width = self.config.n_classes
-
-    W = tf.Variable(weight_initializer((W_height, W_width) ))
-    b1 = tf.Variable(tf.zeros(self.config.hidden_size,))
-    U = tf.Variable(weight_initializer((U_height, U_width) ))
-    b2 = tf.Variable(tf.zeros(self.config.n_classes))
-
-    hidden_layer = tf.nn.relu(tf.matmul(x, W) + b1)
-    h_drop = tf.nn.dropout(hidden_layer, self.dropout_placeholder)
-    pred = tf.matmul(h_drop, U) + b2
-    return pred
+    return outputs
 
   def add_loss_op(self, pred):
     """Adds Ops for the loss function to the computational graph.

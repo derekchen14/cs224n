@@ -89,6 +89,7 @@ ENV/
 
 #Data
 dirty/
+seq2seq/
 
 #Mac Stuff
 .DS_Store
