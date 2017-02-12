@@ -3,20 +3,16 @@ import tensorflow as tf
 import os
 import time
 import pickle
+import sys
 
 from utils.general import Progbar, init_generator
 from utils.parser import minibatches
 
-try:
-  from tensorflow.python.ops.rnn import dynamic_rnn
-except ImportError:
-  from tensorflow.nn.rnn import dynamic_rnn
-
 class Config(object):
   enc_len = 7
   dec_len = 8           # purposely different from enc to easily distinguish
-  vocabulary = 27       # 26 letters of the alphabet and 1 for padding
-  embed_size = 50
+  vocab_size = 6178       # 26 letters of the alphabet and 1 for padding
+  embed_size = 300
   hidden_size = 200
   # dropout = 0.5
   # batch_size = 2048
@@ -26,8 +22,10 @@ class Config(object):
 
 class Seq2SeqModel(object):
   def add_placeholders(self):
-    self.input_placeholder = tf.placeholder(tf.int32, shape=(None, n_features))
-    self.labels_placeholder = tf.placeholder(tf.float32, shape=(None, n_classes))
+    self.input_placeholder = tf.placeholder(tf.float32,
+        shape=(None, None, self.embed_size))
+    self.labels_placeholder = tf.placeholder(tf.float32,
+        shape=(None, None, self.vocab_size))
     # self.dropout_placeholder = tf.placeholder(tf.float32, shape=())
 
   def create_feed_dict(self, inputs_batch, labels_batch=None):
@@ -38,29 +36,33 @@ class Seq2SeqModel(object):
 
   def encoder_decoder(self):
     # weight_initializer = init_generator(self.initializer)
-    init_layer = tf.Variable(tf.contrib.layers.xavier_initializer)
+    # init_layer = tf.Variable(tf.contrib.layers.xavier_initializer)
+    # print "-" * 80
+    # print self.input_placeholder
+    # print "-" * 80
 
     with tf.variable_scope("seq2seq") as scope:
-      enc_cell = tf.nn.rnn_cell.GRUCell(self.enc_len)
-      dec_cell = tf.nn.rnn_cell.GRUCell(self.dec_len)
+      enc_cell = tf.contrib.rnn.GRUCell(self.enc_len)
+      dec_cell = tf.contrib.rnn.GRUCell(self.dec_len)
 
-      # _ refers to outputs, which are not useful in this model
-      _, enc_state = dynamic_rnn(enc_cell, inputs,
-          sequence_length=None, initial_state=None, dtype=None)
-      simple_decoder_fn = simple_decoder_fn_train(enc_state)
-      outputs, dec_state, final_context = dynamic_rnn_decoder(dec_cell,
-        decoder_fn=simple_decoder_fn, inputs=None, sequence_length=None)
+      _, enc_state = tf.nn.dynamic_rnn(enc_cell, self.input_placeholder,
+          sequence_length=None, initial_state=None, dtype=tf.float32)
+      decoder_fn = tf.contrib.seq2seq.simple_decoder_fn_train(enc_state)
 
-    return outputs, dec_state, final_context
+      logits, dec_state, final_context = tf.contrib.seq2seq.dynamic_rnn_decoder(
+          dec_cell, decoder_fn=decoder_fn, inputs=self.output_placeholder,
+          sequence_length=None)
 
-  def add_loss_op(self, pred, weights):
+    return logits, dec_state, final_context
+
+  def add_loss_op(self, logits, weights):
     """Adds Ops for the loss function to the computational graph.
     Args:
         pred: A tensor of shape (batch_size, n_classes)
     Returns:
         loss: A 0-d tensor (scalar) output
     """
-    loss = tf.nn.sequence_loss( pred, self.output_placeholder, weights)
+    loss = tf.nn.sequence_loss(logits, self.output_placeholder, weights)
     # (logits, targets, weights, average_across_timesteps=True,
     #   average_across_batch=True, softmax_loss_function=None, name=None):
     # loss = tf.reduce_mean(total_loss)
@@ -89,15 +91,18 @@ class Seq2SeqModel(object):
     return predictions
 
   def build(self):
+    print self.answers.shape
+    print "<<<<<<<<<<<<<<<<<<"
     self.add_placeholders()
     self.pred, self.dec_state, self.final_context = self.encoder_decoder()
-    self.loss = self.add_loss_op(self.pred, self.final_context)
+    self.loss = self.add_loss_op(self.pred, self.dec_state)
     self.train_op = self.add_training_op(self.loss)
+
 
   def __init__(self, config, training_data):
     self.enc_len = config.enc_len
     self.dec_len = config.dec_len
-    self.n_classes = config.vocabulary
+    self.vocab_size = training_data["vocab_size"]
     self.embed_size = config.embed_size
     self.hidden_size = config.hidden_size
     self.n_epochs = config.n_epochs
@@ -113,7 +118,8 @@ class Seq2SeqModel(object):
 def main(debug=True):
   config = Config()
   # embeddings, train_examples, dev_set, test_set = loader
-  training_data = pickle.load(open("spaCy/encode.py", "rb"))
+  training_data = pickle.load(open("clean/encodedDataEmbeddings.p", "rb"))
+  training_data["vocab_size"] = config.vocab_size
     # loadedData = pickle.load(open(writeTo, "rb"))
   # if not os.path.exists('./data/weights/'):
   #     os.makedirs('./data/weights/')
@@ -136,11 +142,11 @@ def main(debug=True):
       print 80 * "="
       print "TRAINING"
       print 80 * "="
-      for epoch in range(self.config.n_epochs):
+      for epoch in range(model.n_epochs):
         print "Epoch {:} out of {:}".format(epoch + 1, self.config.n_epochs)
 
         fetches = [model.train_op, model.loss]    # array of desired outputs
-        feed_dict = model.create_feed_dict(answers, questions)     # dictionary of inputs
+        feed_dict = model.create_feed_dict(model.answers, model.questions)     # dictionary of inputs
         _, loss = session.run(fetches, feed_dict)
 
         prog = Progbar(target=1 + model.n_examples / model.batch_size)
@@ -148,5 +154,3 @@ def main(debug=True):
 
 if __name__ == '__main__':
     main()
-
-
