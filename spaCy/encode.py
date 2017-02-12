@@ -11,7 +11,7 @@ sys.setdefaultencoding("utf-8")
 def loadQAPairs():
     data = []
     for filename in os.listdir('clean'):
-        if filename.endswith(".csv"): 
+        if filename.endswith(".csv"):
             toOpen = os.path.join('clean',filename)
             with open(toOpen, 'rb') as f:
                 data.extend([row for row in csv.reader(f.read().splitlines())][1:])
