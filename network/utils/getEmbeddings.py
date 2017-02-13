@@ -41,6 +41,10 @@ def generateEmbeddingMatrix(nlp, reduced):
         assert len(pair) == 3, "Pair wrong size. %s" % pair
 
         for phrase in pair[:2]:
+            if len(phrase) == 0:
+                encodedPair = []
+                print "This phrase had a Q/A of len 0. Ignoring it.", phrase
+                break
             assert len(phrase) > 0, "Empty QorA."
             encodedPhrase = []
             doc = nlp(unicode(phrase, errors='ignore'))
@@ -66,12 +70,18 @@ def load_and_preprocess_data(reduced=True):
     return np.array(encodedAnswers), np.array(encodedQuestions), np.array(embedding_matrix)
 
 if __name__ == '__main__':
-    A, Q, embedding_matrix = load_and_preprocess_data(True)
+    A, Q, embedding_matrix = load_and_preprocess_data(False)
     print 'A[:5] ', A[:5]
     print 'Q[:5] ',Q[:5]
     print embedding_matrix.shape
 
+    Q_lens = [len(q) for q in Q]
+    A_lens = [len(a) for a in A]
 
+    import pylab as P
+    P.figure()
+    n, bins, patches = P.hist([Q_lens,A_lens], 20, histtype='bar')
+    P.show()
 
 
 
