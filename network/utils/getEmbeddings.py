@@ -16,6 +16,7 @@ def generateEmbeddingMatrix(nlp, reduced):
     encodedAnswers = []
     embedding_matrix = []
     encoded = {}
+    decoder = {}
 
     def loadQAPairs():
         print "Reading csv files."
@@ -52,6 +53,7 @@ def generateEmbeddingMatrix(nlp, reduced):
                 if str(word) not in encoded:
                     vIndex = len(encoded.keys())
                     encoded[str(word)] = vIndex
+                    decoder[vIndex] = str(word)
                     embedding_matrix.append(word.vector)
                 encodedPhrase.append(encoded[str(word)])
             encodedPair.append(encodedPhrase)
@@ -61,16 +63,16 @@ def generateEmbeddingMatrix(nlp, reduced):
             encodedAnswers.append(encodedPair[0])
         assert len(encodedQuestions) == len(encodedAnswers), 'Num answers and questions not equal. %s, %s' % (len(encodedQuestions),len(encodedAnswers))
     print "Generating embedding matrix complete."
-    return encodedAnswers, encodedQuestions, embedding_matrix
+    return encodedAnswers, encodedQuestions, embedding_matrix, decoder
 
 
 def load_and_preprocess_data(reduced=True):
     nlp = spacy.load('en')
-    encodedAnswers, encodedQuestions, embedding_matrix = generateEmbeddingMatrix(nlp, reduced)
-    return np.array(encodedAnswers), np.array(encodedQuestions), np.array(embedding_matrix)
+    encodedAnswers, encodedQuestions, embedding_matrix, decoder = generateEmbeddingMatrix(nlp, reduced)
+    return np.array(encodedAnswers), np.array(encodedQuestions), np.array(embedding_matrix), decoder
 
 if __name__ == '__main__':
-    A, Q, embedding_matrix = load_and_preprocess_data(False)
+    A, Q, embedding_matrix, decoder = load_and_preprocess_data(False)
     print 'A[:5] ', A[:5]
     print 'Q[:5] ',Q[:5]
     print embedding_matrix.shape
@@ -82,6 +84,15 @@ if __name__ == '__main__':
     P.figure()
     n, bins, patches = P.hist([Q_lens,A_lens], 20, histtype='bar')
     P.show()
+
+    for i in range(len(Q)):
+        if len(Q[i]) < 5 and len(A[i])<5:
+            print 'Q:', ' | '.join([decoder[w] for w in Q[i]])
+            print 'A:', ' | '.join([decoder[w] for w in A[i]])
+
+
+
+
 
 
 
