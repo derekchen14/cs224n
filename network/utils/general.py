@@ -173,3 +173,25 @@ class Progbar(object):
 
     def add(self, n, values=[]):
         self.update(self.seen_so_far+n, values)
+
+
+
+if __name__ == '__main__':
+
+    data = [[[1,1],[2,2],[3,3]],[[3,3, 3],[2,2,2],[1,1,1]]]
+
+    # data = [[[1,2],[3,4]], [[9,10],[11,12]], [[13,14],[15,16]], [[131,141],[151,161]]]
+    minibatch_size =2
+    res = get_minibatches(data, minibatch_size, shuffle=False)
+    for i in res:
+        print i
+
+
+
+
+
+
+
+
+
+

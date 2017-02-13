@@ -9,6 +9,14 @@ import pickle
 
 class Config(object):
     data_path = './clean'
+    minibatch_size = 20
+    reduced_size = 200
+    reduced_train = 120
+    reduced_dev = 60
+    reduced_test = 20
+    dev_size = 0.15
+    test_size = 0.05
+
 
 def generateEmbeddingMatrix(nlp, reduced):
     config = Config()
@@ -37,7 +45,7 @@ def generateEmbeddingMatrix(nlp, reduced):
             print pair
         encodedPair = []
         if reduced:
-            if i >=200:
+            if i >=config.reduced_size:
                 break
         assert len(pair) == 3, "Pair wrong size. %s" % pair
 
@@ -71,8 +79,34 @@ def load_and_preprocess_data(reduced=True):
     encodedAnswers, encodedQuestions, embedding_matrix, decoder = generateEmbeddingMatrix(nlp, reduced)
     return np.array(encodedAnswers), np.array(encodedQuestions), np.array(embedding_matrix), decoder
 
+#### Minibatches ####
+def get_minibatches(data, minibatch_size, shuffle=True):
+    list_data = type(data) is list and (type(data[0]) is list or type(data[0]) is np.ndarray)
+    data_size = len(data[0]) if list_data else len(data)
+    indices = np.arange(data_size)
+    if shuffle:
+        np.random.shuffle(indices)
+    for minibatch_start in np.arange(0, data_size, minibatch_size):
+        minibatch_indices = indices[minibatch_start:minibatch_start + minibatch_size]
+        yield [minibatch(d, minibatch_indices) for d in data] if list_data \
+            else minibatch(data, minibatch_indices)
+def minibatch(data, minibatch_idx):
+    return data[minibatch_idx] if type(data) is np.ndarray else [data[i] for i in minibatch_idx]
+
+### Call this one with data #####
+def get_minibatches(A,Q):
+    minibatchesGen = get_minibatches([A,Q], config.minibatch_size, shuffle=True)
+    # How to use:
+    # for minibatch in minibatchesGen:
+    #     print 'Answers in batch: ', minibatch[0]
+    #     print 'Questions in batch: ', minibatch[1]
+    return minibatchesGen
+
+
 if __name__ == '__main__':
+
     A, Q, embedding_matrix, decoder = load_and_preprocess_data(False)
+
     print 'A[:5] ', A[:5]
     print 'Q[:5] ',Q[:5]
     print embedding_matrix.shape
