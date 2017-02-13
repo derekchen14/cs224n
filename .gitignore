@@ -89,6 +89,7 @@ ENV/
 
 #Data
 dirty/
+clean/
 seq2seq/
 
 #Mac Stuff
