@@ -14,8 +14,9 @@ class Config(object):
     reduced_train = 120
     reduced_dev = 60
     reduced_test = 20
+    test_size = 0.8
     dev_size = 0.15
-    test_size = 0.05
+    test_size = 1.0 - test_size - dev_size
 
 
 def generateEmbeddingMatrix(nlp, reduced):
@@ -75,9 +76,22 @@ def generateEmbeddingMatrix(nlp, reduced):
 
 
 def load_and_preprocess_data(reduced=True):
+    config = Config()
     nlp = spacy.load('en')
     encodedAnswers, encodedQuestions, embedding_matrix, decoder = generateEmbeddingMatrix(nlp, reduced)
-    return np.array(encodedAnswers), np.array(encodedQuestions), np.array(embedding_matrix), decoder
+
+    # Split up the data.
+    if reduced:
+        a = config.reduced_train
+        b = config.reduced_train+config.reduced_dev
+    else:
+        a = float(len(encodedAnswers))* config.test_size
+        b = a + float(len(encodedAnswers))* config.dev_size
+    train_set = [encodedAnswers[:a], encodedQuestions[:a]]
+    dev_set = [encodedAnswers[a:b], encodedQuestions[a:b]]
+    test_set = [encodedAnswers[b:], encodedQuestions[b:]]
+
+    return np.array(train_set), np.array(dev_set), np.array(test_set) np.array(embedding_matrix), decoder
 
 #### Minibatches ####
 def get_minibatches(data, minibatch_size, shuffle=True):
@@ -105,7 +119,9 @@ def get_minibatches(A,Q):
 
 if __name__ == '__main__':
 
-    A, Q, embedding_matrix, decoder = load_and_preprocess_data(False)
+    train, dev, test, embedding_matrix, decoder = load_and_preprocess_data(False)
+    A = train[0]
+    Q = train[1]
 
     print 'A[:5] ', A[:5]
     print 'Q[:5] ',Q[:5]

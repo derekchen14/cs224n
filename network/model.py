@@ -7,6 +7,8 @@ import sys
 
 from utils.general import Progbar, init_generator
 from utils.parser import minibatches
+from utils.getEmbeddings import minibatches, load_and_preprocess_data
+
 
 class Config(object):
   n_cells = 40      # number cells units in RNN layer
@@ -150,6 +152,11 @@ class Seq2SeqModel(object):
 def main(debug=True):
   config = Config()
   training_data = pickle.load(open("toy_data/toy_embeddings.pkl", "rb"))
+
+  # Hey Derek, use this!
+  if False:
+    train, dev, test, embedding_matrix, decoder = load_and_preprocess_data(False)
+
 
   with tf.Graph().as_default():
     print "Building model...",
