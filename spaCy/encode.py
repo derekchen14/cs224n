@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 import spacy
 import csv
 import os
@@ -62,6 +64,7 @@ def encodeToOneHot(data, nlp):
         # may as well keep the decoded pair attached as well.
         encodedPair.append(pair)
         encodedData.append(encodedPair)
+
     return encodedData, decoder, encoder
 
 
@@ -70,10 +73,18 @@ nlp = spacy.load('en')
 if True:
     writeTo = os.path.join('clean','encodedDataEmbeddings.p')
     encodedData, decoder, __ = encodeToEmbeddings(data, nlp)
-    pickle.dump(encodedData, open(writeTo,"wb+"))
-    pickle.dump(decoder, open(writeTo,"wb"))
-    # loadedDecoder = pickle.load(open(writeTo, "rb"))
-    # loadedData = pickle.load(open(writeTo, "rb"))
+    # do some organizing.
+    newEncodedData = {'answers': [], 'questions': [], 'vocab_size':len(decoder.keys())}
+    for idx, data in enumerate(encodedData):
+        newEncodedData['answers'].append(data[0])
+        newEncodedData['questions'].append(data[1])
+        # For Dereks wimpy computer.
+        if idx > 200:
+            break
+    pickle.dump(newEncodedData, open(writeTo,"w+"))
+    print "WROTE."
+    # encodedData = pickle.load(open(writeTo, "rb"))
+
 else:
     writeTo = os.path.join('clean','encodedDataOneHot.p')
     encodedData, decoder, encoder = encodeToOneHot(data, nlp)
