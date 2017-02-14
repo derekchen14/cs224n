@@ -10,12 +10,9 @@ from utils.parser import minibatches
 from utils.getEmbeddings import get_minibatches, loader
 
 class Config(object):
-  n_cells = 40      # number cells units in RNN layer
+  n_cells = 200      # number cells units in RNN layer
                     # passed into rnn.GRUCell() or rnn. LSTMCell
-  enc_seq_len = 7       #theoretically, not needed with dynamic RNN
-  dec_seq_len = 8           # purposely different from enc to easily distinguish
-  vocab_size = 26       # 26 letters of the alphabet and 1 for padding
-  embed_size = 26
+  embed_size = 300
   # dropout = 0.5
   # batch_size = 202
   n_epochs = 10
@@ -36,11 +33,11 @@ class Config(object):
 class Seq2SeqModel(object):
   def add_placeholders(self):
     # (batch_size, sequence_length, embedding_dimension)
-    self.input_placeholder = tf.placeholder(tf.float32,
-        shape=(self.batch_size, None, self.embed_size))
+    self.input_placeholder = tf.placeholder(tf.int32,
+        shape=(self.batch_size, None))
     # (batch_size, sequence_length, vocab_size)
-    self.output_placeholder = tf.placeholder(tf.float32,
-        shape=(self.batch_size, None, self.vocab_size))
+    self.output_placeholder = tf.placeholder(tf.int32,
+        shape=(self.batch_size, None))
     self.enc_seq_len = tf.placeholder(tf.int32, shape=(self.batch_size,))
     self.dec_seq_len = tf.placeholder(tf.int32, shape=(self.batch_size,))
     # self.dropout_placeholder = tf.placeholder(tf.float32, shape=())
@@ -70,6 +67,10 @@ class Seq2SeqModel(object):
     embedding_tensor = tf.Variable(self.pretrained_embeddings)
     questions = tf.nn.embedding_lookup(embedding_tensor, self.input_placeholder)
     answers = tf.nn.embedding_lookup(embedding_tensor, self.output_placeholder)
+
+
+
+
     return questions, answers
 
 
@@ -78,6 +79,12 @@ class Seq2SeqModel(object):
          initializer=tf.contrib.layers.xavier_initializer())
 
     questions, answers = self.add_embedding()
+
+    print questions.get_shape()
+    print answers.get_shape()
+    # (20, ?, 300)
+    # (20, ?, 300)
+
     with tf.variable_scope("seq2seq") as scope:
       enc_cell = tf.contrib.rnn.GRUCell(self.n_cells)
       dec_cell = tf.contrib.rnn.GRUCell(self.n_cells)
@@ -111,6 +118,12 @@ class Seq2SeqModel(object):
     # (logits, targets, weights, average_across_timesteps=True,
     #   average_across_batch=True, softmax_loss_function=None, name=None):
 
+    print "I don't think this is the right shape:"
+    print logits.get_shape()
+    print "exitting."
+    sys.exit()
+    # loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(pred,self.labels_placeholder))
+
 
     idx = tf.range(self.batch_size)*tf.shape(logits)[1] + (self.dec_seq_len - 1)
     last_output = tf.gather(tf.reshape(logits, [-1, self.n_cells]), idx)
@@ -121,9 +134,15 @@ class Seq2SeqModel(object):
     # labels of shape [batch_size].
     dec_labels = [int(np.sum(sen)) for sen in self.answers]
 
-    cross_entropy_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
+    cross_entropy_loss = tf.nn.softmax_cross_entropy_with_logits(
         labels=dec_labels, logits=last_output)
     loss = tf.reduce_mean(cross_entropy_loss)
+
+
+
+
+
+
     return loss
 
   def add_training_op(self, loss):
@@ -169,10 +188,8 @@ class Seq2SeqModel(object):
 
   def __init__(self, config, embedding_matrix):
     self.n_cells = config.n_cells
-    self.enc_seq_len = config.enc_seq_len
-    self.dec_seq_len = config.dec_seq_len
     self.embed_size = config.embed_size
-    self.vocab_size = config.vocab_size
+    self.vocab_size = len(embedding_matrix)
     self.n_epochs = config.n_epochs
     self.lr = config.learning_rate
     self.initializer = config.initializer
