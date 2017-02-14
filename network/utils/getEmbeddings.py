@@ -8,8 +8,6 @@ import numpy as np
 import pickle
 
 
-
-
 def generateEmbeddingMatrix(nlp, config, reduced):
     encodedQuestions =[]
     encodedAnswers = []
@@ -17,18 +15,20 @@ def generateEmbeddingMatrix(nlp, config, reduced):
     encoded = {}
     decoder = {}
 
-    def loadQAPairs():
+    def loadQAPairs(reduced):
         print "Reading csv files."
         data = []
         for filename in os.listdir(config.data_path):
             if filename.endswith(".csv"):
                 toOpen = os.path.join(config.data_path,filename)
                 with open(toOpen, 'rb') as f:
+                    if len(data) >=config.reduced_size:
+                        break
                     data.extend([row for row in csv.reader(f.read().splitlines())][1:])
         print "Reading csv files complete."
         return data
 
-    data = loadQAPairs()
+    data = loadQAPairs(reduced)
 
     print "Generating embedding matrix."
     for i, pair in enumerate(data):
