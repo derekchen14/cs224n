@@ -7,20 +7,10 @@ import sys
 import numpy as np
 import pickle
 
-class Config(object):
-    data_path = './clean'
-    minibatch_size = 20
-    reduced_size = 200
-    reduced_train = 120
-    reduced_dev = 60
-    reduced_test = 20
-    test_size = 0.8
-    dev_size = 0.15
-    test_size = 1.0 - test_size - dev_size
 
 
-def generateEmbeddingMatrix(nlp, reduced):
-    config = Config()
+
+def generateEmbeddingMatrix(nlp, config, reduced):
     encodedQuestions =[]
     encodedAnswers = []
     embedding_matrix = []
@@ -42,8 +32,8 @@ def generateEmbeddingMatrix(nlp, reduced):
 
     print "Generating embedding matrix."
     for i, pair in enumerate(data):
-        if i % 100 == 0:
-            print pair
+        # if i % 100 == 0:
+        #     print pair
         encodedPair = []
         if reduced:
             if i >=config.reduced_size:
@@ -61,24 +51,23 @@ def generateEmbeddingMatrix(nlp, reduced):
             for word in doc:
                 if str(word) not in encoded:
                     vIndex = len(encoded.keys())
-                    encoded[str(word)] = vIndex
+                    encoded[str(word)] = int(vIndex)
                     decoder[vIndex] = str(word)
                     embedding_matrix.append(word.vector)
                 encodedPhrase.append(encoded[str(word)])
             encodedPair.append(encodedPhrase)
 
         if encodedPair:
-            encodedQuestions.append(encodedPair[1])
-            encodedAnswers.append(encodedPair[0])
+            encodedQuestions.append(np.asarray(encodedPair[1],dtype='int32'))
+            encodedAnswers.append(np.asarray(encodedPair[0],dtype='int32'))
         assert len(encodedQuestions) == len(encodedAnswers), 'Num answers and questions not equal. %s, %s' % (len(encodedQuestions),len(encodedAnswers))
     print "Generating embedding matrix complete."
     return encodedAnswers, encodedQuestions, embedding_matrix, decoder
 
 
-def load_and_preprocess_data(reduced=True):
-    config = Config()
+def loader(config, reduced=True):
     nlp = spacy.load('en')
-    encodedAnswers, encodedQuestions, embedding_matrix, decoder = generateEmbeddingMatrix(nlp, reduced)
+    encodedAnswers, encodedQuestions, embedding_matrix, decoder = generateEmbeddingMatrix(nlp, config, reduced)
 
     # Split up the data.
     if reduced:
@@ -87,11 +76,14 @@ def load_and_preprocess_data(reduced=True):
     else:
         a = float(len(encodedAnswers))* config.test_size
         b = a + float(len(encodedAnswers))* config.dev_size
-    train_set = [encodedAnswers[:a], encodedQuestions[:a]]
-    dev_set = [encodedAnswers[a:b], encodedQuestions[a:b]]
-    test_set = [encodedAnswers[b:], encodedQuestions[b:]]
+    train_set = np.asarray([encodedAnswers[:a], encodedQuestions[:a]])
+    dev_set = np.asarray([encodedAnswers[a:b], encodedQuestions[a:b]])
+    test_set = np.asarray([encodedAnswers[b:], encodedQuestions[b:]])
 
-    return np.array(train_set), np.array(dev_set), np.array(test_set) np.array(embedding_matrix), decoder
+    matrix = np.asarray(embedding_matrix, dtype='float32')
+    return train_set, dev_set, test_set, matrix, decoder
+
+    return np.array(train_set), np.array(dev_set), np.array(test_set), matrix, decoder
 
 #### Minibatches ####
 def get_minibatches(data, minibatch_size, shuffle=True):
@@ -107,19 +99,21 @@ def get_minibatches(data, minibatch_size, shuffle=True):
 def minibatch(data, minibatch_idx):
     return data[minibatch_idx] if type(data) is np.ndarray else [data[i] for i in minibatch_idx]
 
-### Call this one with data #####
-def get_minibatches(A,Q):
-    minibatchesGen = get_minibatches([A,Q], config.minibatch_size, shuffle=True)
-    # How to use:
-    # for minibatch in minibatchesGen:
-    #     print 'Answers in batch: ', minibatch[0]
-    #     print 'Questions in batch: ', minibatch[1]
-    return minibatchesGen
+### Call like this, with data #####
+# def get_minibatches(A,Q):
+#     minibatchesGen = get_minibatches([A,Q], config.minibatch_size, shuffle=True)
+#     # How to use:
+#     # for minibatch in minibatchesGen:
+#     #     print 'Answers in batch: ', minibatch[0]
+#     #     print 'Questions in batch: ', minibatch[1]
+#     return minibatchesGen
 
 
 if __name__ == '__main__':
 
-    train, dev, test, embedding_matrix, decoder = load_and_preprocess_data(False)
+    ## BROKEN NOW , needs config. ##
+
+    train, dev, test, embedding_matrix, decoder = loader(False)
     A = train[0]
     Q = train[1]
 

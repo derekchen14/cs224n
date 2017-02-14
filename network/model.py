@@ -7,8 +7,7 @@ import sys
 
 from utils.general import Progbar, init_generator
 from utils.parser import minibatches
-from utils.getEmbeddings import minibatches, load_and_preprocess_data
-
+from utils.getEmbeddings import get_minibatches, loader
 
 class Config(object):
   n_cells = 40      # number cells units in RNN layer
@@ -23,20 +22,35 @@ class Config(object):
   learning_rate = 0.001
   initializer = "glorot" # for xavier or "normal" for truncated normal
 
+  # used by loader.
+  data_path = './clean'
+  minibatch_size = 20
+  reduced_size = 200
+  reduced_train = 120
+  reduced_dev = 60
+  reduced_test = 20
+  test_size = 0.8
+  dev_size = 0.15
+  test_size = 1.0 - test_size - dev_size
+
 class Seq2SeqModel(object):
   def add_placeholders(self):
     # (batch_size, sequence_length, embedding_dimension)
     self.input_placeholder = tf.placeholder(tf.float32,
-        shape=(50, 7, self.embed_size))
+        shape=(self.batch_size, None, self.embed_size))
     # (batch_size, sequence_length, vocab_size)
     self.output_placeholder = tf.placeholder(tf.float32,
-        shape=(50, 8, self.vocab_size))
+        shape=(self.batch_size, None, self.vocab_size))
+    self.enc_seq_len = tf.placeholder(tf.int32, shape=(self.batch_size,))
+    self.dec_seq_len = tf.placeholder(tf.int32, shape=(self.batch_size,))
     # self.dropout_placeholder = tf.placeholder(tf.float32, shape=())
 
-  def create_feed_dict(self, input_batch, output_batch=None):
+  def create_feed_dict(self, input_batch, output_batch, sequence_length):
     feed_dict = {
       self.input_placeholder: input_batch,
       self.output_placeholder: output_batch,
+      self.enc_seq_len: sequence_length["enc"],
+      self.dec_seq_len: sequence_length["dec"]
     }    # self.dropout_placeholder: dropout
 
     return feed_dict
@@ -51,31 +65,38 @@ class Seq2SeqModel(object):
   # it, the third sentence has 8 words as well.  Notice that neither 40 nor 50 show
   # up anywhere, that was a trick question.
 
-  def encoder_decoder(self):
-    init_state = tf.get_variable('init_state', [50, self.n_cells],
-         initializer=tf.contrib.layers.xavier_initializer())
-    enc_seq_len = [np.sum(sen) for sen in self.questions]
-    dec_seq_len = [np.sum(sen) for sen in self.answers]
+  def add_embedding(self):
+    # Maybe one day change to Variable.
+    embedding_tensor = tf.Variable(self.pretrained_embeddings)
+    questions = tf.nn.embedding_lookup(embedding_tensor, self.input_placeholder)
+    answers = tf.nn.embedding_lookup(embedding_tensor, self.output_placeholder)
+    return questions, answers
 
+
+  def encoder_decoder(self):
+    init_state = tf.get_variable('init_state', [self.batch_size, self.n_cells],
+         initializer=tf.contrib.layers.xavier_initializer())
+
+    questions, answers = self.add_embedding()
     with tf.variable_scope("seq2seq") as scope:
       enc_cell = tf.contrib.rnn.GRUCell(self.n_cells)
       dec_cell = tf.contrib.rnn.GRUCell(self.n_cells)
 
       # Encoder (sequence_length )
       _, enc_state = tf.nn.dynamic_rnn(enc_cell,
-          self.input_placeholder, sequence_length=enc_seq_len,
+          questions, sequence_length=self.enc_seq_len,
           initial_state=init_state, dtype=tf.float32)
       # Intermediate decoder function
       decoder_fn = tf.contrib.seq2seq.simple_decoder_fn_train(enc_state)
       # Decoder
       with tf.variable_scope("decoder"):
         logits, dec_state, final_context = tf.contrib.seq2seq.dynamic_rnn_decoder(
-            dec_cell, decoder_fn=decoder_fn,
-            inputs=self.output_placeholder, sequence_length=8)
+            dec_cell, decoder_fn=decoder_fn, inputs=answers,
+            sequence_length=tf.reduce_max(self.dec_seq_len))
       with tf.variable_scope("decoder", reuse=True):
         test_logits, _, _ = tf.contrib.seq2seq.dynamic_rnn_decoder(
-            dec_cell, decoder_fn=decoder_fn,
-            inputs=self.output_placeholder, sequence_length=8)
+            dec_cell, decoder_fn=decoder_fn, inputs=answers,
+            sequence_length=tf.reduce_max(self.dec_seq_len))
 
     return logits, dec_state, final_context
 
@@ -91,7 +112,7 @@ class Seq2SeqModel(object):
     #   average_across_batch=True, softmax_loss_function=None, name=None):
 
 
-    idx = tf.range(50)*tf.shape(logits)[1] + (self.dec_seq_len - 1)
+    idx = tf.range(self.batch_size)*tf.shape(logits)[1] + (self.dec_seq_len - 1)
     last_output = tf.gather(tf.reshape(logits, [-1, self.n_cells]), idx)
 
     # last_output = tf.gather_nd(logits,
@@ -114,6 +135,18 @@ class Seq2SeqModel(object):
     train_op = optimizer.minimize(loss)
     return train_op
 
+  def train_on_batch(self, batch, sess):
+    fetches = [self.train_op, self.loss]    # array of desired outputs
+    answers = batch[0]
+    questions = batch[1]
+    sequence_length = {
+      "enc": [len(a) for a in answers],
+      "dec":  [len(b) for b in questions]
+    }
+    feed_dict = self.create_feed_dict(questions, answers, sequence_length)     # dictionary of inputs
+    _, loss = sess.run(fetches, feed_dict)
+    return loss
+
   def predict_on_batch(self, sess, inputs_batch):
     """Make predictions for the provided batch of data
 
@@ -123,6 +156,7 @@ class Seq2SeqModel(object):
     Returns:
         predictions: np.ndarray of shape (n_samples, n_classes)
     """
+    # decoder
     feed = self.create_feed_dict(inputs_batch)
     predictions = sess.run(self.pred, feed_dict=feed)
     return predictions
@@ -133,7 +167,7 @@ class Seq2SeqModel(object):
     self.loss = self.add_loss_op(self.pred)
     self.train_op = self.add_training_op(self.loss)
 
-  def __init__(self, config, training_data):
+  def __init__(self, config, embedding_matrix):
     self.n_cells = config.n_cells
     self.enc_seq_len = config.enc_seq_len
     self.dec_seq_len = config.dec_seq_len
@@ -143,31 +177,26 @@ class Seq2SeqModel(object):
     self.lr = config.learning_rate
     self.initializer = config.initializer
 
-    # self.pretrained_embeddings = pretrained_embeddings
-    self.questions = np.asarray(training_data[:50])
-    self.answers = np.asarray(training_data[50:])
+    self.batch_size = config.minibatch_size
+    # self.questions = training_data[1]
+    # self.answers = np.asarray(training_data[:50])
+    self.pretrained_embeddings = embedding_matrix
     # self.n_examples = training_data["questions"].shape[0]
     self.build()
 
 def main(debug=True):
   config = Config()
-  training_data = pickle.load(open("toy_data/toy_embeddings.pkl", "rb"))
-
-  # Hey Derek, use this!
-  if False:
-    train, dev, test, embedding_matrix, decoder = load_and_preprocess_data(False)
-
+  # training_data = pickle.load(open("toy_data/toy_embeddings.pkl", "rb"))
+  train, dev, _ , embedding_matrix, _ = loader(config, reduced=True)
 
   with tf.Graph().as_default():
     print "Building model...",
     start = time.time()
-    model = Seq2SeqModel(config, training_data)
+    allData = train
+    model = Seq2SeqModel(config, embedding_matrix)
     print "took {:.2f} seconds\n".format(time.time() - start)
 
     init = tf.global_variables_initializer()
-    # If you are using an old version of TensorFlow, you may have to use
-    # this initializer instead.
-    # init = tf.initialize_all_variables()
     # saver = None if debug else tf.train.Saver()
 
     with tf.Session() as session:
@@ -176,16 +205,17 @@ def main(debug=True):
       print 80 * "="
       print "TRAINING"
       print 80 * "="
+
       for epoch in range(model.n_epochs):
         print "Epoch {:} out of {:}".format(epoch + 1, model.n_epochs)
 
-        fetches = [model.train_op, model.loss]    # array of desired outputs
-        feed_dict = model.create_feed_dict(model.questions, model.answers)     # dictionary of inputs
-        _, loss = session.run(fetches, feed_dict)
+        allBatches = generate_batch(allData, config.minibatch_size, shuffle=False)
+        data_size = len(allData[0])
 
-        # prog = Progbar(target=1 + model.batch_size / 50)
-        # prog.update(i + 1, [("train loss", loss)])
-        print loss
+        for batch in allBatches:
+          loss = model.train_on_batch(batch, session)
+          prog = Progbar(target=1 + config.minibatch_size / data_size)
+          prog.update(i + 1, [("train loss", loss)])
 
 if __name__ == '__main__':
     main()
