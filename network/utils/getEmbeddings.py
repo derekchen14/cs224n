@@ -22,9 +22,8 @@ def generateEmbeddingMatrix(nlp, config, reduced):
             if filename.endswith(".csv"):
                 toOpen = os.path.join(config.data_path,filename)
                 with open(toOpen, 'rb') as f:
-                    if reduced:
-                        if len(data) >=config.reduced_size:
-                            break
+                    if reduced and len(data) >=config.reduced_size:
+                        break
                     data.extend([row for row in csv.reader(f.read().splitlines())][1:])
         print "Reading csv files complete."
         return data
@@ -32,20 +31,12 @@ def generateEmbeddingMatrix(nlp, config, reduced):
     data = loadQAPairs(reduced)
 
     print "Generating embedding matrix."
-    for i, pair in enumerate(data):
-        # if i % 100 == 0:
-        #     print pair
-        encodedPair = []
-        if reduced:
-            if i >=config.reduced_size:
-                break
-        assert len(pair) == 3, "Pair wrong size. %s" % pair
+    for index, pair in enumerate(data):
+        if reduced and (index >= config.reduced_size):
+            break
 
+        encodedPair = []
         for phrase in pair[:2]:
-            if len(phrase) == 0:
-                encodedPair = []
-                print "This phrase had a Q/A of len 0. Ignoring it.", phrase
-                break
             assert len(phrase) > 0, "Empty QorA."
             encodedPhrase = []
             doc = nlp(unicode(phrase, errors='ignore'))

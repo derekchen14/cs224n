@@ -67,23 +67,20 @@ class Seq2SeqModel(object):
     embedding_tensor = tf.Variable(self.pretrained_embeddings)
     questions = tf.nn.embedding_lookup(embedding_tensor, self.input_placeholder)
     answers = tf.nn.embedding_lookup(embedding_tensor, self.output_placeholder)
-
-
-
-
     return questions, answers
-
 
   def encoder_decoder(self):
     init_state = tf.get_variable('init_state', [self.batch_size, self.n_cells],
          initializer=tf.contrib.layers.xavier_initializer())
 
     questions, answers = self.add_embedding()
-
-    print questions.get_shape()
-    print answers.get_shape()
+    # print questions.get_shape()
+    # print answers.get_shape()
     # (20, ?, 300)
     # (20, ?, 300)
+    # This tuple represents a random Q/A pair, we will check it makes any sense
+    pair = (questions[3], answers[3])
+    self.embedding_to_text(pair)
 
     with tf.variable_scope("seq2seq") as scope:
       enc_cell = tf.contrib.rnn.GRUCell(self.n_cells)
@@ -118,12 +115,8 @@ class Seq2SeqModel(object):
     # (logits, targets, weights, average_across_timesteps=True,
     #   average_across_batch=True, softmax_loss_function=None, name=None):
 
-    print "I don't think this is the right shape:"
     print logits.get_shape()
-    print "exitting."
-    sys.exit()
     # loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(pred,self.labels_placeholder))
-
 
     idx = tf.range(self.batch_size)*tf.shape(logits)[1] + (self.dec_seq_len - 1)
     last_output = tf.gather(tf.reshape(logits, [-1, self.n_cells]), idx)
@@ -134,15 +127,10 @@ class Seq2SeqModel(object):
     # labels of shape [batch_size].
     dec_labels = [int(np.sum(sen)) for sen in self.answers]
 
+    # might be sparse
     cross_entropy_loss = tf.nn.softmax_cross_entropy_with_logits(
         labels=dec_labels, logits=last_output)
     loss = tf.reduce_mean(cross_entropy_loss)
-
-
-
-
-
-
     return loss
 
   def add_training_op(self, loss):
@@ -160,11 +148,19 @@ class Seq2SeqModel(object):
     questions = batch[1]
     sequence_length = {
       "enc": [len(a) for a in answers],
-      "dec":  [len(b) for b in questions]
+      "dec":  [len(q) for q in questions]
     }
     feed_dict = self.create_feed_dict(questions, answers, sequence_length)     # dictionary of inputs
     _, loss = sess.run(fetches, feed_dict)
     return loss
+
+  def embedding_to_text(self, pair):
+    q, a = pair
+    x = tf.Print(q, [q], message="I wrote this ---------")
+    # sess = tf.InteractiveSession()
+    # sess.run(y)
+    # print q.eval(session=sess)
+    # sys.exit()
 
   def predict_on_batch(self, sess, inputs_batch):
     """Make predictions for the provided batch of data
@@ -226,13 +222,13 @@ def main(debug=True):
       for epoch in range(model.n_epochs):
         print "Epoch {:} out of {:}".format(epoch + 1, model.n_epochs)
 
-        allBatches = generate_batch(allData, config.minibatch_size, shuffle=False)
+        allBatches = get_minibatches(allData, config.minibatch_size, shuffle=False)
         data_size = len(allData[0])
 
         for batch in allBatches:
           loss = model.train_on_batch(batch, session)
-          prog = Progbar(target=1 + config.minibatch_size / data_size)
-          prog.update(i + 1, [("train loss", loss)])
+          # prog = Progbar(target=1 + config.minibatch_size / data_size)
+          # prog.update(i + 1, [("train loss", loss)])
 
 if __name__ == '__main__':
     main()
