@@ -7,7 +7,7 @@ import sys
 
 from utils.general import Progbar, init_generator
 from utils.parser import minibatches
-from utils.getEmbeddings import minibatches, load_and_preprocess_data
+from utils.getEmbeddings import get_minibatches, load_and_preprocess_data
 
 
 class Config(object):
@@ -151,7 +151,7 @@ class Seq2SeqModel(object):
 
 def main(debug=True):
   config = Config()
-  training_data = pickle.load(open("toy_data/toy_embeddings.pkl", "rb"))
+  training_data = pickle.load(open("dirty/toy_data/toy_embeddings.pkl", "rb"))
 
   # Hey Derek, use this!
   if False:

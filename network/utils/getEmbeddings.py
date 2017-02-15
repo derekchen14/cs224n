@@ -91,7 +91,7 @@ def load_and_preprocess_data(reduced=True):
     dev_set = [encodedAnswers[a:b], encodedQuestions[a:b]]
     test_set = [encodedAnswers[b:], encodedQuestions[b:]]
 
-    return np.array(train_set), np.array(dev_set), np.array(test_set) np.array(embedding_matrix), decoder
+    return np.array(train_set), np.array(dev_set), np.array(test_set), np.array(embedding_matrix), decoder
 
 #### Minibatches ####
 def get_minibatches(data, minibatch_size, shuffle=True):
