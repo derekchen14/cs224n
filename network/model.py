@@ -90,6 +90,7 @@ class Seq2SeqModel(object):
     # (logits, targets, weights, average_across_timesteps=True,
     #   average_across_batch=True, softmax_loss_function=None, name=None):
 
+    pred = tf.Print(pred, [tf.shape(pred)], first_n=3)
 
     idx = tf.range(50)*tf.shape(pred)[1] + (self.dec_seq_len - 1)
     last_output = tf.gather(tf.reshape(pred, [-1, self.n_cells]), idx)
@@ -104,6 +105,9 @@ class Seq2SeqModel(object):
       weight = tf.Variable(tf.truncated_normal([self.n_cells, self.vocab_size], stddev=0.1), name="W")
       bias = tf.Variable(tf.constant(0.1, shape=[self.vocab_size]), name="b")
     logits = tf.matmul(last_output, weight) + bias
+
+    dataToDisplay = [logits[4]] #, tf.shape(logits)]
+    # logits = tf.Print(logits, dataToDisplay, summarize=26)
     # preds = tf.nn.softmax(logits)
     # correct = tf.equal(tf.cast(tf.argmax(preds,1),tf.int32), y)
     # accuracy = tf.reduce_mean(tf.cast(correct, tf.float32))
@@ -134,6 +138,29 @@ class Seq2SeqModel(object):
     """
     feed = self.create_feed_dict(inputs_batch)
     predictions = sess.run(self.pred, feed_dict=feed)
+
+    result = ['Prediction: ']
+    for letter in test:
+      try:
+        position = letter.tolist().index(1)
+        result.append(lookup[position])
+      except ValueError:
+        result.append(' ')
+    result.append(' ')
+    for letter in predictions:
+      big = max(letter)
+      position = letter.index(big)
+      # print letter
+      if big > 0.5:
+        result.append(lookup[position])
+      elif big > 0.4:
+        result.append("("+lookup[position]+")")
+      else:
+        result.append('-')
+
+    print ''.join(result)
+
+
     return predictions
 
   def build(self):
@@ -190,6 +217,23 @@ def main(debug=True):
         # prog = Progbar(target=1 + model.batch_size / 50)
         # prog.update(i + 1, [("train loss", loss)])
         print loss
+
+      print 80 * "="
+      print "PREDICTION"
+      print 80 * "="
+      test_samples = np.random.choice(50, 10, replace=False)
+
+      for sample in test_samples:
+        pass
+        # create same fake sample
+        # test = X_train[sample,:,:]
+        # pass sample into session.run
+        # preds = model.predict(np.asarray([test]), verbose=0)[0]
+        # predictions = preds.tolist()
+
+
+
+
 
 if __name__ == '__main__':
     main()
