@@ -62,9 +62,15 @@ class Seq2SeqModel(object):
       dec_cell = tf.contrib.rnn.GRUCell(self.n_cells)
 
       # Encoder (sequence_length )
-      _, enc_state = tf.nn.dynamic_rnn(enc_cell,
+      enc_output, enc_state = tf.nn.dynamic_rnn(enc_cell,
           self.input_placeholder, sequence_length=enc_seq_len,
           initial_state=init_state, dtype=tf.float32)
+
+      enc_state = tf.Print(enc_state, [enc_state, tf.shape(enc_state)],
+          first_n=3, message="Encoder State:")
+      enc_output = tf.Print(enc_output, [enc_output, tf.shape(enc_output)],
+          first_n=3, message="Encoder output:")
+
       # Intermediate decoder function
       decoder_fn = tf.contrib.seq2seq.simple_decoder_fn_train(enc_state)
       # Decoder
@@ -97,8 +103,13 @@ class Seq2SeqModel(object):
     # last_output = tf.gather_nd(logits,
     #     tf.pack([tf.range(50), self.dec_seq_len-1], axis=1))
     # logits of shape [batch_size, num_classes]
-    # labels of shape [batch_size].
+    # labels of shape [batch_size], list of 50 values
     dec_labels = [int(np.sum(sen)) for sen in self.answers]
+
+    last_output = tf.Print(last_output, [last_output, tf.shape(last_output)],
+        first_n=3, message="Last Output:")
+    dec_labels = tf.Print(dec_labels, [dec_labels, tf.shape(dec_labels)],
+        first_n=3, summarize=10, message="Decoder labels:")
 
     cross_entropy_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
         labels=dec_labels, logits=last_output)
