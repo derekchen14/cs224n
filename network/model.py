@@ -20,7 +20,7 @@ class Config(object):
   # dropout = 0.5
   # batch_size = 202
   n_epochs = 10
-  learning_rate = 0.001
+  learning_rate = 0.0001
   initializer = "glorot" # for xavier or "normal" for truncated normal
 
 class Seq2SeqModel(object):
@@ -79,7 +79,7 @@ class Seq2SeqModel(object):
 
     return logits, dec_state, final_context
 
-  def add_loss_op(self, logits):
+  def add_loss_op(self, pred):
     """Adds Ops for the loss function to the computational graph.
     Args:
         pred: A tensor of shape (batch_size, n_classes)
@@ -91,8 +91,8 @@ class Seq2SeqModel(object):
     #   average_across_batch=True, softmax_loss_function=None, name=None):
 
 
-    idx = tf.range(50)*tf.shape(logits)[1] + (self.dec_seq_len - 1)
-    last_output = tf.gather(tf.reshape(logits, [-1, self.n_cells]), idx)
+    idx = tf.range(50)*tf.shape(pred)[1] + (self.dec_seq_len - 1)
+    last_output = tf.gather(tf.reshape(pred, [-1, self.n_cells]), idx)
 
     # last_output = tf.gather_nd(logits,
     #     tf.pack([tf.range(50), self.dec_seq_len-1], axis=1))
@@ -100,8 +100,16 @@ class Seq2SeqModel(object):
     # labels of shape [batch_size].
     dec_labels = [int(np.sum(sen)) for sen in self.answers]
 
+    with tf.variable_scope('lossy'):
+      weight = tf.Variable(tf.truncated_normal([self.n_cells, self.vocab_size], stddev=0.1), name="W")
+      bias = tf.Variable(tf.constant(0.1, shape=[self.vocab_size]), name="b")
+    logits = tf.matmul(last_output, weight) + bias
+    # preds = tf.nn.softmax(logits)
+    # correct = tf.equal(tf.cast(tf.argmax(preds,1),tf.int32), y)
+    # accuracy = tf.reduce_mean(tf.cast(correct, tf.float32))
+
     cross_entropy_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
-        labels=dec_labels, logits=last_output)
+        labels=dec_labels, logits=logits)
     loss = tf.reduce_mean(cross_entropy_loss)
     return loss
 
@@ -110,6 +118,7 @@ class Seq2SeqModel(object):
     Args: loss: Loss tensor, from cross_entropy_loss.
     Returns: train_op: The Op for training.
     """
+
     optimizer = tf.train.AdamOptimizer(self.lr)
     train_op = optimizer.minimize(loss)
     return train_op
@@ -152,11 +161,6 @@ class Seq2SeqModel(object):
 def main(debug=True):
   config = Config()
   training_data = pickle.load(open("dirty/toy_data/toy_embeddings.pkl", "rb"))
-
-  # Hey Derek, use this!
-  if False:
-    train, dev, test, embedding_matrix, decoder = load_and_preprocess_data(False)
-
 
   with tf.Graph().as_default():
     print "Building model...",
