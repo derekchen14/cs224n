@@ -19,18 +19,18 @@ class Config(object):
   embed_size = 26
   # dropout = 0.5
   # batch_size = 202
-  n_epochs = 10
-  learning_rate = 0.0001
+  n_epochs = 50
+  learning_rate = 0.01
   initializer = "glorot" # for xavier or "normal" for truncated normal
 
 class Seq2SeqModel(object):
   def add_placeholders(self):
     # (batch_size, sequence_length, embedding_dimension)
     self.input_placeholder = tf.placeholder(tf.float32,
-        shape=(50, 7, self.embed_size))
+        shape=(50, 7, self.embed_size), name='question')
     # (batch_size, sequence_length, vocab_size)
     self.output_placeholder = tf.placeholder(tf.float32,
-        shape=(50, 8, self.vocab_size))
+        shape=(50, 8, self.vocab_size), name='answer')
     # self.dropout_placeholder = tf.placeholder(tf.float32, shape=())
 
   def create_feed_dict(self, input_batch, output_batch=None):
@@ -104,7 +104,10 @@ class Seq2SeqModel(object):
     with tf.variable_scope('lossy'):
       weight = tf.Variable(tf.truncated_normal([self.n_cells, self.vocab_size], stddev=0.1), name="W")
       bias = tf.Variable(tf.constant(0.1, shape=[self.vocab_size]), name="b")
+      tf.summary.histogram("WeightLossy",weight)
+      tf.summary.histogram("biasLossy",bias)
     logits = tf.matmul(last_output, weight) + bias
+    tf.summary.histogram("logitsLossy",logits)
 
     dataToDisplay = [logits[4]] #, tf.shape(logits)]
     # logits = tf.Print(logits, dataToDisplay, summarize=26)
@@ -114,6 +117,8 @@ class Seq2SeqModel(object):
 
     cross_entropy_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
         labels=dec_labels, logits=logits)
+    # Tensorboard.
+    tf.summary.histogram("cross_entropy_loss", cross_entropy_loss)
     loss = tf.reduce_mean(cross_entropy_loss)
     return loss
 
@@ -125,6 +130,8 @@ class Seq2SeqModel(object):
 
     optimizer = tf.train.AdamOptimizer(self.lr)
     train_op = optimizer.minimize(loss)
+    # tensorboard.
+    tf.summary.scalar("loss", loss)
     return train_op
 
   def predict_on_batch(self, sess, inputs_batch):
@@ -203,16 +210,24 @@ def main(debug=True):
 
     with tf.Session() as session:
       session.run(init)
+      summary_op = tf.summary.merge_all()
 
       print 80 * "="
       print "TRAINING"
       print 80 * "="
       for epoch in range(model.n_epochs):
+
+        # Tensorboard. Run: tensorboard --logdir=run1:/tmp/tensorflow/model1 --port 6006
+        logs_path = '/tmp/tensorflow/model2'
+        writer = tf.summary.FileWriter(logs_path, graph=tf.get_default_graph())
+
         print "Epoch {:} out of {:}".format(epoch + 1, model.n_epochs)
 
-        fetches = [model.train_op, model.loss]    # array of desired outputs
+        fetches = [model.train_op, model.loss, summary_op]    # array of desired outputs
         feed_dict = model.create_feed_dict(model.questions, model.answers)     # dictionary of inputs
-        _, loss = session.run(fetches, feed_dict)
+        _, loss, summary = session.run(fetches, feed_dict)
+
+        writer.add_summary(summary, epoch)# * batch_count + i)
 
         # prog = Progbar(target=1 + model.batch_size / 50)
         # prog.update(i + 1, [("train loss", loss)])
