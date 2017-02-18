@@ -15,8 +15,8 @@ class Config(object):
                     # passed into rnn.GRUCell() or rnn. LSTMCell
   enc_seq_len = 7       #theoretically, not needed with dynamic RNN
   dec_seq_len = 8           # purposely different from enc to easily distinguish
-  vocab_size = 26       # 26 letters of the alphabet and 1 for padding
-  embed_size = 26
+  vocab_size = 27       # 26 letters of the alphabet and 1 for padding
+  embed_size = 27
   # dropout = 0.5
   # batch_size = 202
   n_epochs = 50
@@ -189,6 +189,41 @@ class Seq2SeqModel(object):
     # self.pretrained_embeddings = pretrained_embeddings
     self.questions = np.asarray(training_data[:50])
     self.answers = np.asarray(training_data[50:])
+
+    # For decoding predicted sentences. This works, just uncomment.
+    # a = "abcdefghijklmnopqrstuvwxyz "
+    # self.vocabDict = {a.index(l):l for l in a}
+    # print self.vocabDict
+    # self.questionsIndexes = []
+    # for q in self.questions:
+    #   question = []
+    #   for word in q:        
+    #     outIndex = 26
+    #     for index, oneHot in enumerate(word):
+    #       if oneHot == 1:
+    #         outIndex = index
+    #     question.append(outIndex)
+    #   self.questionsIndexes.append(question)
+    # self.answersIndexes = []
+    # for a in self.answers:
+    #   answer = []
+    #   for word in a:
+    #     outIndex = 26
+    #     for index, oneHot in enumerate(word):
+    #       if oneHot == 1:
+    #         outIndex = index
+    #     answer.append(outIndex)
+    #   self.answersIndexes.append(answer)
+    # for answer in self.answersIndexes:
+    #   answerString = ''
+    #   for index in answer:
+    #     answerString += self.vocabDict[index]
+    #   print answerString
+
+
+    sys.exit()
+
+
     # self.n_examples = training_data["questions"].shape[0]
     self.build()
 
