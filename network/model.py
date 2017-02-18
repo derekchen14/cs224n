@@ -220,10 +220,6 @@ class Seq2SeqModel(object):
     #     answerString += self.vocabDict[index]
     #   print answerString
 
-
-    sys.exit()
-
-
     # self.n_examples = training_data["questions"].shape[0]
     self.build()
 
