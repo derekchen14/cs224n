@@ -75,7 +75,7 @@ def generateEmbeddingMatrix(nlp, reduced):
     return encodedAnswers, encodedQuestions, embedding_matrix, decoder
 
 
-def load_and_preprocess_data(reduced=True):
+def loader(reduced=True):
     config = Config()
     nlp = spacy.load('en')
     encodedAnswers, encodedQuestions, embedding_matrix, decoder = generateEmbeddingMatrix(nlp, reduced)
@@ -94,28 +94,50 @@ def load_and_preprocess_data(reduced=True):
     return np.array(train_set), np.array(dev_set), np.array(test_set), np.array(embedding_matrix), decoder
 
 #### Minibatches ####
-def get_minibatches(data, minibatch_size, shuffle=True):
+def splitData(data, mbatch_size, shuffle=True):
     list_data = type(data) is list and (type(data[0]) is list or type(data[0]) is np.ndarray)
     data_size = len(data[0]) if list_data else len(data)
+    print "data_size:", data_size
     indices = np.arange(data_size)
     if shuffle:
         np.random.shuffle(indices)
-    for minibatch_start in np.arange(0, data_size, minibatch_size):
-        minibatch_indices = indices[minibatch_start:minibatch_start + minibatch_size]
-        yield [minibatch(d, minibatch_indices) for d in data] if list_data \
-            else minibatch(data, minibatch_indices)
+    for mbatch_start in np.arange(0, data_size, mbatch_size):
+        mbatch_indices = indices[mbatch_start:mbatch_start + mbatch_size]
+        yield [minibatch(d, mbatch_indices) for d in data] if list_data \
+            else minibatch(data, mbatch_indices)
 def minibatch(data, minibatch_idx):
-    return data[minibatch_idx] if type(data) is np.ndarray else [data[i] for i in minibatch_idx]
+    if type(data) is np.ndarray:
+        return data[minibatch_idx]
+    else:
+        return [data[i] for i in minibatch_idx]
 
 ### Call this one with data #####
-def get_minibatches(A,Q):
-    minibatchesGen = get_minibatches([A,Q], config.minibatch_size, shuffle=True)
+def get_batches(data, size, shuffle=True, toy=False):
+    if toy:
+        batchGenerator = splitToyData(data, size, shuffle)
+    else:
+        batchGenerator = splitData(data, size, shuffle)
     # How to use:
     # for minibatch in minibatchesGen:
     #     print 'Answers in batch: ', minibatch[0]
     #     print 'Questions in batch: ', minibatch[1]
-    return minibatchesGen
+    return batchGenerator
 
+def splitToyData(data, minibatch_size, shuffle):
+    data_size = len(data)/2
+    indices = np.arange(data_size)
+    if shuffle:
+        np.random.shuffle(indices)
+    for minibatch_start in np.arange(0, data_size, minibatch_size):
+        q_start = minibatch_start
+        q_end = minibatch_start + minibatch_size
+        queries = [data[i] for i in np.arange(q_start, q_end)]
+
+        a_start = minibatch_start + data_size
+        a_end = minibatch_start + minibatch_size + data_size
+        answers = [data[i] for i in np.arange(a_start, a_end)]
+
+        yield [queries, answers]
 
 if __name__ == '__main__':
 

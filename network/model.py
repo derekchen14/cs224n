@@ -7,7 +7,7 @@ import sys
 
 from utils.general import Progbar, init_generator
 from utils.parser import minibatches
-from utils.getEmbeddings import get_minibatches, load_and_preprocess_data
+from utils.getEmbeddings import get_batches, loader
 
 
 class Config(object):
@@ -22,21 +22,28 @@ class Config(object):
   n_epochs = 10
   learning_rate = 0.001
   initializer = "glorot" # for xavier or "normal" for truncated normal
+  batch_size = 10
 
 class Seq2SeqModel(object):
   def add_placeholders(self):
     # (batch_size, sequence_length, embedding_dimension)
     self.input_placeholder = tf.placeholder(tf.float32,
-        shape=(50, 7, self.embed_size), name='question')
+        shape=(self.batch_size, 7, self.embed_size), name='question')
     # (batch_size, sequence_length, vocab_size)
     self.output_placeholder = tf.placeholder(tf.float32,
-        shape=(50, 8, self.vocab_size), name='answer')
+        shape=(self.batch_size, 8, self.vocab_size), name='answer')
+    self.enc_seq_len = tf.placeholder(tf.int32, shape=(self.batch_size,))
+    self.dec_seq_len = tf.placeholder(tf.int32, shape=(self.batch_size,))
+    self.labels = tf.placeholder(tf.int32, shape=(self.batch_size,))
     # self.dropout_placeholder = tf.placeholder(tf.float32, shape=())
 
-  def create_feed_dict(self, input_batch, output_batch=None):
+  def create_feed_dict(self, input_batch, output_batch, labels, sequence_length):
     feed_dict = {
       self.input_placeholder: input_batch,
       self.output_placeholder: output_batch,
+      self.enc_seq_len: sequence_length["enc"],
+      self.dec_seq_len: sequence_length["dec"],
+      self.labels: labels
     }    # self.dropout_placeholder: dropout
 
     return feed_dict
@@ -52,10 +59,8 @@ class Seq2SeqModel(object):
   # up anywhere, that was a trick question.
 
   def encoder_decoder(self):
-    init_state = tf.get_variable('init_state', [50, self.n_cells],
+    init_state = tf.get_variable('init_state', [self.batch_size, self.n_cells],
          initializer=tf.contrib.layers.xavier_initializer())
-    enc_seq_len = [np.sum(sen) for sen in self.questions]
-    dec_seq_len = [np.sum(sen) for sen in self.answers]
 
     with tf.variable_scope("seq2seq") as scope:
       enc_cell = tf.contrib.rnn.GRUCell(self.n_cells)
@@ -63,7 +68,7 @@ class Seq2SeqModel(object):
 
       # Encoder (sequence_length )
       _, enc_state = tf.nn.dynamic_rnn(enc_cell,
-          self.input_placeholder, sequence_length=enc_seq_len,
+          self.input_placeholder, sequence_length=self.enc_seq_len,
           initial_state=init_state, dtype=tf.float32)
       # Intermediate decoder function
       decoder_fn = tf.contrib.seq2seq.simple_decoder_fn_train(enc_state)
@@ -71,11 +76,11 @@ class Seq2SeqModel(object):
       with tf.variable_scope("decoder"):
         logits, dec_state, final_context = tf.contrib.seq2seq.dynamic_rnn_decoder(
             dec_cell, decoder_fn=decoder_fn,
-            inputs=self.output_placeholder, sequence_length=8)
+            inputs=self.output_placeholder, sequence_length=self.dec_seq_len)
       with tf.variable_scope("decoder", reuse=True):
         test_logits, _, _ = tf.contrib.seq2seq.dynamic_rnn_decoder(
             dec_cell, decoder_fn=decoder_fn,
-            inputs=self.output_placeholder, sequence_length=8)
+            inputs=self.output_placeholder, sequence_length=self.dec_seq_len)
 
     return logits, dec_state, final_context
 
@@ -90,16 +95,15 @@ class Seq2SeqModel(object):
     # (logits, targets, weights, average_across_timesteps=True,
     #   average_across_batch=True, softmax_loss_function=None, name=None):
 
-    pred = tf.Print(pred, [tf.shape(pred)], first_n=3)
+    # pred = tf.Print(pred, [tf.shape(pred)], first_n=3)
 
-    idx = tf.range(50)*tf.shape(pred)[1] + (self.dec_seq_len - 1)
+    idx = tf.range(self.batch_size)*tf.shape(pred)[1] + (self.dec_seq_len - 1)
     last_output = tf.gather(tf.reshape(pred, [-1, self.n_cells]), idx)
 
     # last_output = tf.gather_nd(logits,
     #     tf.pack([tf.range(50), self.dec_seq_len-1], axis=1))
     # logits of shape [batch_size, num_classes]
     # labels of shape [batch_size].
-    dec_labels = [int(np.sum(sen)) for sen in self.answers]
 
     with tf.variable_scope('lossy'):
       weight = tf.Variable(tf.truncated_normal([self.n_cells, self.vocab_size], stddev=0.1), name="W")
@@ -116,7 +120,7 @@ class Seq2SeqModel(object):
     # accuracy = tf.reduce_mean(tf.cast(correct, tf.float32))
 
     cross_entropy_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
-        labels=dec_labels, logits=logits)
+        labels=self.labels, logits=logits)
     # Tensorboard.
     tf.summary.histogram("cross_entropy_loss", cross_entropy_loss)
     loss = tf.reduce_mean(cross_entropy_loss)
@@ -167,8 +171,26 @@ class Seq2SeqModel(object):
 
     print ''.join(result)
 
-
     return predictions
+
+  def train(self, sess, summary_op):
+    allBatches = get_batches(self.all_data, self.batch_size, False, True)
+    prog = Progbar(target=(len(self.all_data)/2) / self.batch_size)
+    summary = []
+    fetches = [self.train_op, self.loss, summary_op]    # array of desired outputs
+
+    for i, batch in enumerate(allBatches):
+      questions, answers = batch[0], batch[1]
+      enc_seq_len = [np.sum(sen) for sen in questions]
+      dec_seq_len = [np.sum(sen) for sen in answers]
+      labels =  [int(np.sum(sen)) for sen in answers]
+      seq_len = {"enc": enc_seq_len, "dec": dec_seq_len}
+      feed_dict = self.create_feed_dict(questions, answers, labels, seq_len)     # dictionary of inputs
+
+      _, loss, summary = sess.run(fetches, feed_dict)
+
+    prog.update(i + 1, [("train loss", loss)])
+    return summary
 
   def build(self):
     self.add_placeholders()
@@ -187,66 +209,73 @@ class Seq2SeqModel(object):
     self.initializer = config.initializer
 
     # self.pretrained_embeddings = pretrained_embeddings
-    self.questions = np.asarray(training_data[:50])
-    self.answers = np.asarray(training_data[50:])
+    self.all_data = training_data
+    # self.questions = np.asarray(training_data[:50])
+    self.batch_size = config.batch_size
 
     # self.n_examples = training_data["questions"].shape[0]
     self.build()
 
+def embedding_to_text(query, answer):
+  lookup = list('abcdefghijklmnopqrstuvwxyz')
+  result = []
+  for letter in query:
+    try:
+      position = letter.tolist().index(1)
+      result.append(lookup[position])
+    except ValueError:
+      result.append(' ')
+  result.append(' ')
+  for letter in answer:
+    big = max(letter)
+    position = letter.index(big)
+    if big > 0.5:
+      result.append(lookup[position])
+    elif big > 0.4:
+      result.append("("+lookup[position]+")")
+    else:
+      result.append('-')
+
+  print ''.join(result)
+
+  return predictions
+
+
 def main(debug=True):
   config = Config()
-  training_data = pickle.load(open("dirty/toy_data/toy_embeddings.pkl", "rb"))
+  all_data = pickle.load(open("dirty/toy_data/toy_embeddings.pkl", "rb"))
 
   with tf.Graph().as_default():
     print "Building model...",
     start = time.time()
-    model = Seq2SeqModel(config, training_data)
+    model = Seq2SeqModel(config, all_data)
     print "took {:.2f} seconds\n".format(time.time() - start)
-
-    init = tf.global_variables_initializer()
     # saver = None if debug else tf.train.Saver()
 
     with tf.Session() as session:
-      session.run(init)
+      session.run(tf.global_variables_initializer())
       summary_op = tf.summary.merge_all()
 
       print 80 * "="
       print "TRAINING"
       print 80 * "="
       for epoch in range(model.n_epochs):
-
-        # Tensorboard. Run: tensorboard --logdir=run1:/tmp/tensorflow/model1 --port 6006
-        logs_path = '/tmp/tensorflow/model2'
+        # Tensorboard. Run: tensorboard --logdir=run1:/tmp/tensorflow/board --port 6006
+        logs_path = '/tmp/tensorflow/board'
         writer = tf.summary.FileWriter(logs_path, graph=tf.get_default_graph())
-
         print "Epoch {:} out of {:}".format(epoch + 1, model.n_epochs)
-
-        fetches = [model.train_op, model.loss, summary_op]    # array of desired outputs
-        feed_dict = model.create_feed_dict(model.questions, model.answers)     # dictionary of inputs
-        _, loss, summary = session.run(fetches, feed_dict)
-
+        summary = model.train(session, summary_op)
         writer.add_summary(summary, epoch)# * batch_count + i)
 
-        # prog = Progbar(target=1 + model.batch_size / 50)
-        # prog.update(i + 1, [("train loss", loss)])
-        print loss
-
-      print 80 * "="
-      print "PREDICTION"
-      print 80 * "="
-      test_samples = np.random.choice(50, 10, replace=False)
-
-      for sample in test_samples:
-        pass
+      # print "PREDICTION"
+      # test_samples = np.random.choice(50, 10, replace=False)
+      # for sample in test_samples:
+      #   pass
         # create same fake sample
         # test = X_train[sample,:,:]
         # pass sample into session.run
         # preds = model.predict(np.asarray([test]), verbose=0)[0]
         # predictions = preds.tolist()
-
-
-
-
 
 if __name__ == '__main__':
     main()
