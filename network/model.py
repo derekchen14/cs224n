@@ -16,7 +16,7 @@ class Config(object):
                     # passed into rnn.GRUCell() or rnn. LSTMCell
   max_enc_len = 7       #theoretically, not needed with dynamic RNN
   max_dec_len = 8           # purposely different from enc to easily distinguish
-  vocab_size = 27       # 26 letters of the alphabet and 1 for padding
+  vocab_size = 27      # 26 letters of the alphabet and 1 for padding
                         # 0 stands for padding, 1-26 stands for A-Z
   embed_size = 27
   # dropout = 0.5
@@ -94,7 +94,7 @@ class Seq2SeqModel(object):
               dec_cell, decoder_fn=decoder_fn,
               inputs=self.output_placeholder, sequence_length=self.dec_seq_len)
       elif self.stage is "inference":
-        enc_state = tf.Print(enc_state, ["came here"])
+        # enc_state = tf.Print(enc_state, ["came here"])
         with tf.variable_scope("decoder"):
           pred, _, _ = tf.contrib.seq2seq.dynamic_rnn_decoder(dec_cell,
               decoder_fn=decoder_fn, inputs=None, sequence_length=self.dec_seq_len)
@@ -132,8 +132,9 @@ class Seq2SeqModel(object):
     # of predictions, rather than just a single predictions
     # pred = tf.Print(pred, [tf.shape(pred)], first_n=3, message="before pad:") #[10, 8, 40]
 
-    # for some reason, when a batch has sequence length less than the max, the
-    # prediction is truncated rather than maintain the same length, so we
+    # for some reason, when a particular batch has sequence length less
+    # than the max, the prediction are truncated to the max of that batch
+    # rather than maintainingthe same length, so we
     # add in those as zeros appended to the end of the tensor
     diff = self.max_dec_len - tf.shape(pred)[1]
     # paddings is [   [dim1 before, dim1 after],
@@ -162,17 +163,9 @@ class Seq2SeqModel(object):
           [self.batch_size, self.max_dec_len, self.vocab_size])
       final_output = tf.nn.softmax(logits)
 
-    final_output = tf.Print(final_output, [tf.shape(final_output)],
-        first_n=3, message="Final output shape")
-    '''
-      with tf.variable_scope('lossy'):
-        weight = tf.Variable(tf.truncated_normal([self.n_cells, self.vocab_size], stddev=0.1), name="W")
-        bias = tf.Variable(tf.constant(0.1, shape=[self.vocab_size]), name="b")
-        tf.summary.histogram("WeightLossy",weight)
-        tf.summary.histogram("biasLossy",bias)
-      logits = tf.matmul(last_output, weight) + bias
-      tf.summary.histogram("logitsLossy",logits)
-    '''
+    # final_output = tf.Print(final_output, [tf.shape(final_output)],
+    #     first_n=3, message="Final output shape")
+
     # tf.summary.histogram("WeightLossy",weight)
     # tf.summary.histogram("biasLossy",bias)
     # tf.summary.histogram("logitsLossy", logits)
@@ -283,7 +276,7 @@ def embedding_to_text(test_samples, final_output):
       big = max(letter)
       position = letter.tolist().index(big)
       # print "sdfsfdsfsdfdsfsdf"
-      print position
+      # print position
       if big > 0.5:
         result.append(lookup[position])
       elif big > 0.4:
@@ -326,15 +319,11 @@ def main(debug=True):
         model.train(session, summary_op)
         # writer.add_summary(summary, epoch)# * batch_count + i)
 
-        if epoch % 20 == 1:
-          print_bar("prediction")
-          test_indices = np.random.choice(50, 10, replace=False)
-          test_samples = [all_data[i] for i in test_indices]
-          predictions = model.predict(session, test_samples)
-      # print_bar("prediction")
-      # test_indices = np.random.choice(50, 10, replace=False)
-      # test_samples = [all_data[i] for i in test_indices]
-      # predictions = model.predict(session, test_samples)
+    # if epoch % 20 == 0:
+      print_bar("prediction")
+      test_indices = np.random.choice(50, 10, replace=False)
+      test_samples = [all_data[i] for i in test_indices]
+      predictions = model.predict(session, test_samples)
 
 if __name__ == '__main__':
     main()
