@@ -8,18 +8,19 @@ import sys
 from utils.general import Progbar, init_generator
 from utils.parser import minibatches
 from utils.getEmbeddings import get_batches, loader
+from tensorflow.contrib.layers import xavier_initializer
 
 
 class Config(object):
   n_cells = 40      # number cells units in RNN layer
                     # passed into rnn.GRUCell() or rnn. LSTMCell
-  enc_seq_len = 7       #theoretically, not needed with dynamic RNN
-  dec_seq_len = 8           # purposely different from enc to easily distinguish
+  max_enc_len = 7       #theoretically, not needed with dynamic RNN
+  max_dec_len = 8           # purposely different from enc to easily distinguish
   vocab_size = 26       # 26 letters of the alphabet and 1 for padding
   embed_size = 26
   # dropout = 0.5
   # batch_size = 202
-  n_epochs = 10
+  n_epochs = 3
   learning_rate = 0.001
   initializer = "glorot" # for xavier or "normal" for truncated normal
   batch_size = 10
@@ -37,10 +38,18 @@ class Seq2SeqModel(object):
     self.labels = tf.placeholder(tf.int32, shape=(self.batch_size,))
     # self.dropout_placeholder = tf.placeholder(tf.float32, shape=())
 
-  def create_feed_dict(self, input_batch, output_batch, labels, sequence_length):
+  def create_feed_dict(self, input_data, output_data, labels, sequence_length):
+    # When output_data is None, that means we are in inference mode making
+    # making predictions, rather than fitting the data.  However, the model
+    # will not run unless there is target output_data, so we generate bunch
+    # of fake data for the output and the labels
+    if output_data is None:
+      output_data = np.zeros((self.batch_size, 8, self.vocab_size))
+      labels = np.zeros((self.batch_size,))
+
     feed_dict = {
-      self.input_placeholder: input_batch,
-      self.output_placeholder: output_batch,
+      self.input_placeholder: input_data,
+      self.output_placeholder: output_data,
       self.enc_seq_len: sequence_length["enc"],
       self.dec_seq_len: sequence_length["dec"],
       self.labels: labels
@@ -73,16 +82,27 @@ class Seq2SeqModel(object):
       # Intermediate decoder function
       decoder_fn = tf.contrib.seq2seq.simple_decoder_fn_train(enc_state)
       # Decoder
-      with tf.variable_scope("decoder"):
-        logits, dec_state, final_context = tf.contrib.seq2seq.dynamic_rnn_decoder(
-            dec_cell, decoder_fn=decoder_fn,
-            inputs=self.output_placeholder, sequence_length=self.dec_seq_len)
-      with tf.variable_scope("decoder", reuse=True):
-        test_logits, _, _ = tf.contrib.seq2seq.dynamic_rnn_decoder(
-            dec_cell, decoder_fn=decoder_fn,
-            inputs=self.output_placeholder, sequence_length=self.dec_seq_len)
+      stage = "inference" if self.labels is None else "fitting"
+      if stage is "fitting":
+        with tf.variable_scope("decoder"):
+          logits, _, _ = tf.contrib.seq2seq.dynamic_rnn_decoder(
+              dec_cell, decoder_fn=decoder_fn,
+              inputs=self.output_placeholder, sequence_length=self.dec_seq_len)
+        with tf.variable_scope("decoder", reuse=True):
+          logits, dec_state, _ = tf.contrib.seq2seq.dynamic_rnn_decoder(
+              dec_cell, decoder_fn=decoder_fn,
+              inputs=self.output_placeholder, sequence_length=self.dec_seq_len)
+      elif self.stage is "inference":
+        enc_state = tf.Print(enc_state, ["came here"])
+        with tf.variable_scope("decoder"):
+          logits, _, _ = tf.contrib.seq2seq.dynamic_rnn_decoder(dec_cell,
+              decoder_fn=decoder_fn, inputs=None, sequence_length=self.dec_seq_len)
+        with tf.variable_scope("decoder", reuse=True):
+          logits, dec_state, _ = tf.contrib.seq2seq.dynamic_rnn_decoder(
+              dec_cell, decoder_fn=decoder_fn, inputs=None,
+              sequence_length=self.dec_seq_len)
 
-    return logits, dec_state, final_context
+    return logits, dec_state
 
   def add_loss_op(self, pred):
     """Adds Ops for the loss function to the computational graph.
@@ -90,21 +110,45 @@ class Seq2SeqModel(object):
         pred: A tensor of shape (batch_size, n_classes)
     Returns:
         loss: A 0-d tensor (scalar) output
+
     """
     # loss = tf.nn.sequence_loss(logits, self.output_placeholder, weights)
     # (logits, targets, weights, average_across_timesteps=True,
     #   average_across_batch=True, softmax_loss_function=None, name=None):
 
-    # pred = tf.Print(pred, [tf.shape(pred)], first_n=3)
-
-    idx = tf.range(self.batch_size)*tf.shape(pred)[1] + (self.dec_seq_len - 1)
+    # idx = 10 * 8 + (7-1) = 80 + 6 = 86
+    idx = tf.range(self.batch_size)*tf.shape(pred)[1] + (self.max_dec_len - 1)
+    # tf.reshape flattens the multi-dimensional tensor, then tf.gather grabs the
+    # final output in the list, which we call the "last_output"
     last_output = tf.gather(tf.reshape(pred, [-1, self.n_cells]), idx)
-
+    # this is another way to do the same thing
     # last_output = tf.gather_nd(logits,
-    #     tf.pack([tf.range(50), self.dec_seq_len-1], axis=1))
-    # logits of shape [batch_size, num_classes]
-    # labels of shape [batch_size].
+    #     tf.pack([tf.range(50), self.max_dec_len-1], axis=1))
+    # we end up not wanting just the last element since we are making a series
+    # of predictions, rather than just a single predictions
 
+    # flat_size = self.max_dec_len * self.n_cells
+    # print self.n_cells
+    # print self.max_dec_len
+    # print "flat_size", flat_size
+    # flattened_preds = tf.reshape(pred, [self.batch_size, flat_size])
+    # now the predictions are shape (10, 8*40)
+
+    # pred = tf.Print(pred, [tf.shape(pred)], first_n=3) [10, 8, 40]
+    # logits of shape [batch_size, seq_len, vocab_size]
+    # labels of shape [batch_size, seq_len].
+    '''
+    with tf.variable_scope('lossy', initializer=xavier_initializer()):
+      flat_vocab_size = self.max_dec_len * self.vocab_size
+      weight = tf.get_variable(name="W", shape=(flat_size, flat_vocab_size))
+      bias = tf.get_variable(name="b", shape=(flat_vocab_size,) )
+      logits = tf.matmul(flattened_preds, weight) + bias
+      logits = tf.reshape(logits, [self.batch_size, self.max_dec_len, self.vocab_size])
+      final_output = tf.nn.softmax(logits)
+
+    final_output = tf.Print(final_output, [tf.shape(final_output)],
+        first_n=3, message="Final output shape")
+  '''
     with tf.variable_scope('lossy'):
       weight = tf.Variable(tf.truncated_normal([self.n_cells, self.vocab_size], stddev=0.1), name="W")
       bias = tf.Variable(tf.constant(0.1, shape=[self.vocab_size]), name="b")
@@ -113,18 +157,23 @@ class Seq2SeqModel(object):
     logits = tf.matmul(last_output, weight) + bias
     tf.summary.histogram("logitsLossy",logits)
 
-    dataToDisplay = [logits[4]] #, tf.shape(logits)]
+    # tf.summary.histogram("WeightLossy",weight)
+    # tf.summary.histogram("biasLossy",bias)
+    # tf.summary.histogram("logitsLossy", logits)
+
+    # dataToDisplay = [logits[4]] #, tf.shape(logits)]
     # logits = tf.Print(logits, dataToDisplay, summarize=26)
     # preds = tf.nn.softmax(logits)
     # correct = tf.equal(tf.cast(tf.argmax(preds,1),tf.int32), y)
     # accuracy = tf.reduce_mean(tf.cast(correct, tf.float32))
-
+    final_output = 3
+    # we don't pass in the final_output here since the loss function
+    # already includes the softmax calculation inside
     cross_entropy_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
         labels=self.labels, logits=logits)
-    # Tensorboard.
     tf.summary.histogram("cross_entropy_loss", cross_entropy_loss)
     loss = tf.reduce_mean(cross_entropy_loss)
-    return loss
+    return loss, final_output
 
   def add_training_op(self, loss):
     """Sets up the training Ops.
@@ -138,45 +187,20 @@ class Seq2SeqModel(object):
     tf.summary.scalar("loss", loss)
     return train_op
 
-  def predict_on_batch(self, sess, inputs_batch):
-    """Make predictions for the provided batch of data
-
-    Args:
-        sess: tf.Session()
-        input_batch: np.ndarray of shape (n_samples, n_features)
-    Returns:
-        predictions: np.ndarray of shape (n_samples, n_classes)
-    """
-    feed = self.create_feed_dict(inputs_batch)
-    predictions = sess.run(self.pred, feed_dict=feed)
-
-    result = ['Prediction: ']
-    for letter in test:
-      try:
-        position = letter.tolist().index(1)
-        result.append(lookup[position])
-      except ValueError:
-        result.append(' ')
-    result.append(' ')
-    for letter in predictions:
-      big = max(letter)
-      position = letter.index(big)
-      # print letter
-      if big > 0.5:
-        result.append(lookup[position])
-      elif big > 0.4:
-        result.append("("+lookup[position]+")")
-      else:
-        result.append('-')
-
-    print ''.join(result)
-
-    return predictions
+  def predict(self, sess, test_samples):
+    lookup = list('abcdefghijklmnopqrstuvwxyz')
+    seq_len= {"enc": [np.sum(sen) for sen in test_samples],
+        "dec": [8 for sen in test_samples]}
+    _, final_output = sess.run([self.loss, self.final_output],
+        self.create_feed_dict(test_samples, None, None, seq_len) )
+    # print len(final_output)
+    # print final_output.shape
+    # print "sdfdsfffff"
+    self.embedding_to_text(test_samples, final_output)
 
   def train(self, sess, summary_op):
     allBatches = get_batches(self.all_data, self.batch_size, False, True)
     prog = Progbar(target=(len(self.all_data)/2) / self.batch_size)
-    summary = []
     fetches = [self.train_op, self.loss, summary_op]    # array of desired outputs
 
     for i, batch in enumerate(allBatches):
@@ -184,24 +208,28 @@ class Seq2SeqModel(object):
       enc_seq_len = [np.sum(sen) for sen in questions]
       dec_seq_len = [np.sum(sen) for sen in answers]
       labels =  [int(np.sum(sen)) for sen in answers]
+      print answers currently 10x8x26
+      print labels  8
+      we want 10x8
+      sys.exit()
       seq_len = {"enc": enc_seq_len, "dec": dec_seq_len}
       feed_dict = self.create_feed_dict(questions, answers, labels, seq_len)     # dictionary of inputs
 
       _, loss, summary = sess.run(fetches, feed_dict)
+      prog.update(i + 1, [("train loss", loss)])
 
-    prog.update(i + 1, [("train loss", loss)])
-    return summary
+    # return summary
 
   def build(self):
     self.add_placeholders()
-    self.pred, self.dec_state, self.final_context = self.encoder_decoder()
-    self.loss = self.add_loss_op(self.pred)
+    self.pred, self.dec_state = self.encoder_decoder()
+    self.loss, self.final_output = self.add_loss_op(self.pred)
     self.train_op = self.add_training_op(self.loss)
 
   def __init__(self, config, training_data):
     self.n_cells = config.n_cells
-    self.enc_seq_len = config.enc_seq_len
-    self.dec_seq_len = config.dec_seq_len
+    self.max_enc_len = config.max_enc_len
+    self.max_dec_len = config.max_dec_len
     self.embed_size = config.embed_size
     self.vocab_size = config.vocab_size
     self.n_epochs = config.n_epochs
@@ -216,34 +244,51 @@ class Seq2SeqModel(object):
     # self.n_examples = training_data["questions"].shape[0]
     self.build()
 
-def embedding_to_text(query, answer):
+
+def embedding_to_text(test_samples, final_output):
   lookup = list('abcdefghijklmnopqrstuvwxyz')
-  result = []
-  for letter in query:
-    try:
-      position = letter.tolist().index(1)
-      result.append(lookup[position])
-    except ValueError:
-      result.append(' ')
-  result.append(' ')
-  for letter in answer:
-    big = max(letter)
-    position = letter.index(big)
-    if big > 0.5:
-      result.append(lookup[position])
-    elif big > 0.4:
-      result.append("("+lookup[position]+")")
-    else:
-      result.append('-')
+  for idx, sample_word in enumerate(test_samples):
+    result = ['Prediction ', str(idx+1), ': ']
 
-  print ''.join(result)
+    for letter in sample_word:
+      try:
+        position = letter.tolist().index(1)
+        result.append(lookup[position])
+      except ValueError:
+        result.append(' ')
+    result.append(' ')
 
-  return predictions
+    print final_output[3]
+    predicted_word = final_output[idx]
+    for letter in predicted_word:
+      print letter
 
+      big = max(letter)
+      position = letter.tolist().index(big)
+      print "sdfsfdsfsdfdsfsdf"
+      print position
+      if big > 0.5:
+        result.append(lookup[position])
+      elif big > 0.4:
+        result.append("("+lookup[position]+")")
+      else:
+        result.append('-')
+    print ''.join(result)
+
+
+def print_bar(stage):
+  print 80 * "="
+  print stage.upper()
+  print 80 * "="
 
 def main(debug=True):
   config = Config()
   all_data = pickle.load(open("dirty/toy_data/toy_embeddings.pkl", "rb"))
+
+  # test_indices = np.random.choice(50, 10, replace=False)
+  # test_samples = [all_data[i] for i in test_indices]
+  # encoder_sequence_length = {"enc": [np.sum(sen) for sen in test_samples]}
+  # print encoder_sequence_length
 
   with tf.Graph().as_default():
     print "Building model...",
@@ -256,26 +301,23 @@ def main(debug=True):
       session.run(tf.global_variables_initializer())
       summary_op = tf.summary.merge_all()
 
-      print 80 * "="
-      print "TRAINING"
-      print 80 * "="
+      print_bar("training")
       for epoch in range(model.n_epochs):
-        # Tensorboard. Run: tensorboard --logdir=run1:/tmp/tensorflow/board --port 6006
-        logs_path = '/tmp/tensorflow/board'
+        logs_path = '/tmp/tensorflow/board'       # Tensorboard. Run: tensorboard --logdir=run1:/tmp/tensorflow/board --port 6006
         writer = tf.summary.FileWriter(logs_path, graph=tf.get_default_graph())
         print "Epoch {:} out of {:}".format(epoch + 1, model.n_epochs)
-        summary = model.train(session, summary_op)
-        writer.add_summary(summary, epoch)# * batch_count + i)
-
-      # print "PREDICTION"
-      # test_samples = np.random.choice(50, 10, replace=False)
-      # for sample in test_samples:
-      #   pass
-        # create same fake sample
-        # test = X_train[sample,:,:]
-        # pass sample into session.run
-        # preds = model.predict(np.asarray([test]), verbose=0)[0]
-        # predictions = preds.tolist()
+        model.train(session, summary_op)
+        # writer.add_summary(summary, epoch)# * batch_count + i)
+        sys.exit()
+        if epoch % 20 == 1:
+          print_bar("prediction")
+          test_indices = np.random.choice(50, 10, replace=False)
+          test_samples = [all_data[i] for i in test_indices]
+          predictions = model.predict(session, test_samples)
+      # print_bar("prediction")
+      # test_indices = np.random.choice(50, 10, replace=False)
+      # test_samples = [all_data[i] for i in test_indices]
+      # predictions = model.predict(session, test_samples)
 
 if __name__ == '__main__':
     main()
