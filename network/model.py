@@ -16,8 +16,9 @@ class Config(object):
                     # passed into rnn.GRUCell() or rnn. LSTMCell
   max_enc_len = 7       #theoretically, not needed with dynamic RNN
   max_dec_len = 8           # purposely different from enc to easily distinguish
-  vocab_size = 26       # 26 letters of the alphabet and 1 for padding
-  embed_size = 26
+  vocab_size = 27       # 26 letters of the alphabet and 1 for padding
+                        # 0 stands for padding, 1-26 stands for A-Z
+  embed_size = 27
   # dropout = 0.5
   # batch_size = 202
   n_epochs = 3
@@ -32,10 +33,10 @@ class Seq2SeqModel(object):
         shape=(self.batch_size, 7, self.embed_size), name='question')
     # (batch_size, sequence_length, vocab_size)
     self.output_placeholder = tf.placeholder(tf.float32,
-        shape=(self.batch_size, 8, self.vocab_size), name='answer')
+        shape=(self.batch_size, 8, self.embed_size), name='answer')
     self.enc_seq_len = tf.placeholder(tf.int32, shape=(self.batch_size,))
     self.dec_seq_len = tf.placeholder(tf.int32, shape=(self.batch_size,))
-    self.labels = tf.placeholder(tf.int32, shape=(self.batch_size,))
+    self.labels = tf.placeholder(tf.int32, shape=(self.batch_size, self.max_dec_len))
     # self.dropout_placeholder = tf.placeholder(tf.float32, shape=())
 
   def create_feed_dict(self, input_data, output_data, labels, sequence_length):
@@ -45,7 +46,7 @@ class Seq2SeqModel(object):
     # of fake data for the output and the labels
     if output_data is None:
       output_data = np.zeros((self.batch_size, 8, self.vocab_size))
-      labels = np.zeros((self.batch_size,))
+      labels = np.zeros((self.batch_size,self.max_dec_len))
 
     feed_dict = {
       self.input_placeholder: input_data,
@@ -85,24 +86,27 @@ class Seq2SeqModel(object):
       stage = "inference" if self.labels is None else "fitting"
       if stage is "fitting":
         with tf.variable_scope("decoder"):
-          logits, _, _ = tf.contrib.seq2seq.dynamic_rnn_decoder(
+          pred, _, _ = tf.contrib.seq2seq.dynamic_rnn_decoder(
               dec_cell, decoder_fn=decoder_fn,
               inputs=self.output_placeholder, sequence_length=self.dec_seq_len)
         with tf.variable_scope("decoder", reuse=True):
-          logits, dec_state, _ = tf.contrib.seq2seq.dynamic_rnn_decoder(
+          pred, dec_state, _ = tf.contrib.seq2seq.dynamic_rnn_decoder(
               dec_cell, decoder_fn=decoder_fn,
               inputs=self.output_placeholder, sequence_length=self.dec_seq_len)
       elif self.stage is "inference":
         enc_state = tf.Print(enc_state, ["came here"])
         with tf.variable_scope("decoder"):
-          logits, _, _ = tf.contrib.seq2seq.dynamic_rnn_decoder(dec_cell,
+          pred, _, _ = tf.contrib.seq2seq.dynamic_rnn_decoder(dec_cell,
               decoder_fn=decoder_fn, inputs=None, sequence_length=self.dec_seq_len)
         with tf.variable_scope("decoder", reuse=True):
-          logits, dec_state, _ = tf.contrib.seq2seq.dynamic_rnn_decoder(
+          pred, dec_state, _ = tf.contrib.seq2seq.dynamic_rnn_decoder(
               dec_cell, decoder_fn=decoder_fn, inputs=None,
               sequence_length=self.dec_seq_len)
 
-    return logits, dec_state
+    # print pred.shape
+    # pred = tf.Print(pred, [pred.shape], message="Pred shape:")
+
+    return pred, dec_state
 
   def add_loss_op(self, pred):
     """Adds Ops for the loss function to the computational graph.
@@ -117,46 +121,58 @@ class Seq2SeqModel(object):
     #   average_across_batch=True, softmax_loss_function=None, name=None):
 
     # idx = 10 * 8 + (7-1) = 80 + 6 = 86
-    idx = tf.range(self.batch_size)*tf.shape(pred)[1] + (self.max_dec_len - 1)
+    # idx = tf.range(self.batch_size)*tf.shape(pred)[1] + (self.max_dec_len - 1)
     # tf.reshape flattens the multi-dimensional tensor, then tf.gather grabs the
     # final output in the list, which we call the "last_output"
-    last_output = tf.gather(tf.reshape(pred, [-1, self.n_cells]), idx)
+    # last_output = tf.gather(tf.reshape(pred, [-1, self.n_cells]), idx)
     # this is another way to do the same thing
     # last_output = tf.gather_nd(logits,
     #     tf.pack([tf.range(50), self.max_dec_len-1], axis=1))
     # we end up not wanting just the last element since we are making a series
     # of predictions, rather than just a single predictions
+    # pred = tf.Print(pred, [tf.shape(pred)], first_n=3, message="before pad:") #[10, 8, 40]
 
-    # flat_size = self.max_dec_len * self.n_cells
-    # print self.n_cells
-    # print self.max_dec_len
-    # print "flat_size", flat_size
-    # flattened_preds = tf.reshape(pred, [self.batch_size, flat_size])
+    # for some reason, when a batch has sequence length less than the max, the
+    # prediction is truncated rather than maintain the same length, so we
+    # add in those as zeros appended to the end of the tensor
+    diff = self.max_dec_len - tf.shape(pred)[1]
+    # paddings is [   [dim1 before, dim1 after],
+    #                 [dim2 before, dim2 after],
+    #                 [dim3 before, dim3 after]   ]
+    paddings = [[0,0], [0,diff], [0,0]]
+    pred = tf.pad(pred, paddings, mode='CONSTANT', name="pad")
+
+    # pred = tf.Print(pred, [tf.shape(pred)], first_n=3, message="after pad:") #[10, 8, 40]
+
+    flat_size = self.max_dec_len * self.n_cells
+    flattened_preds = tf.reshape(pred, [self.batch_size, flat_size])
     # now the predictions are shape (10, 8*40)
 
-    # pred = tf.Print(pred, [tf.shape(pred)], first_n=3) [10, 8, 40]
     # logits of shape [batch_size, seq_len, vocab_size]
     # labels of shape [batch_size, seq_len].
-    '''
+
     with tf.variable_scope('lossy', initializer=xavier_initializer()):
       flat_vocab_size = self.max_dec_len * self.vocab_size
       weight = tf.get_variable(name="W", shape=(flat_size, flat_vocab_size))
       bias = tf.get_variable(name="b", shape=(flat_vocab_size,) )
-      logits = tf.matmul(flattened_preds, weight) + bias
-      logits = tf.reshape(logits, [self.batch_size, self.max_dec_len, self.vocab_size])
+      # flat_logits should have shape (batch_size, flat_vocab_size) (10, 208)
+      flat_logits = tf.matmul(flattened_preds, weight) + bias
+      # logits should have shape (10, 8, 26)
+      logits = tf.reshape(flat_logits,
+          [self.batch_size, self.max_dec_len, self.vocab_size])
       final_output = tf.nn.softmax(logits)
 
     final_output = tf.Print(final_output, [tf.shape(final_output)],
         first_n=3, message="Final output shape")
-  '''
-    with tf.variable_scope('lossy'):
-      weight = tf.Variable(tf.truncated_normal([self.n_cells, self.vocab_size], stddev=0.1), name="W")
-      bias = tf.Variable(tf.constant(0.1, shape=[self.vocab_size]), name="b")
-      tf.summary.histogram("WeightLossy",weight)
-      tf.summary.histogram("biasLossy",bias)
-    logits = tf.matmul(last_output, weight) + bias
-    tf.summary.histogram("logitsLossy",logits)
-
+    '''
+      with tf.variable_scope('lossy'):
+        weight = tf.Variable(tf.truncated_normal([self.n_cells, self.vocab_size], stddev=0.1), name="W")
+        bias = tf.Variable(tf.constant(0.1, shape=[self.vocab_size]), name="b")
+        tf.summary.histogram("WeightLossy",weight)
+        tf.summary.histogram("biasLossy",bias)
+      logits = tf.matmul(last_output, weight) + bias
+      tf.summary.histogram("logitsLossy",logits)
+    '''
     # tf.summary.histogram("WeightLossy",weight)
     # tf.summary.histogram("biasLossy",bias)
     # tf.summary.histogram("logitsLossy", logits)
@@ -166,7 +182,7 @@ class Seq2SeqModel(object):
     # preds = tf.nn.softmax(logits)
     # correct = tf.equal(tf.cast(tf.argmax(preds,1),tf.int32), y)
     # accuracy = tf.reduce_mean(tf.cast(correct, tf.float32))
-    final_output = 3
+    # final_output = 3
     # we don't pass in the final_output here since the loss function
     # already includes the softmax calculation inside
     cross_entropy_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
@@ -196,7 +212,7 @@ class Seq2SeqModel(object):
     # print len(final_output)
     # print final_output.shape
     # print "sdfdsfffff"
-    self.embedding_to_text(test_samples, final_output)
+    embedding_to_text(test_samples, final_output)
 
   def train(self, sess, summary_op):
     allBatches = get_batches(self.all_data, self.batch_size, False, True)
@@ -207,11 +223,13 @@ class Seq2SeqModel(object):
       questions, answers = batch[0], batch[1]
       enc_seq_len = [np.sum(sen) for sen in questions]
       dec_seq_len = [np.sum(sen) for sen in answers]
-      labels =  [int(np.sum(sen)) for sen in answers]
-      print answers currently 10x8x26
-      print labels  8
-      we want 10x8
-      sys.exit()
+
+      labels = []
+      for word in answers:
+        label = [letter.index(1) for letter in word]
+        labels.append(label)
+
+      labels = np.asarray(labels)
       seq_len = {"enc": enc_seq_len, "dec": dec_seq_len}
       feed_dict = self.create_feed_dict(questions, answers, labels, seq_len)     # dictionary of inputs
 
@@ -246,26 +264,25 @@ class Seq2SeqModel(object):
 
 
 def embedding_to_text(test_samples, final_output):
-  lookup = list('abcdefghijklmnopqrstuvwxyz')
+  lookup = list(' abcdefghijklmnopqrstuvwxyz')
   for idx, sample_word in enumerate(test_samples):
     result = ['Prediction ', str(idx+1), ': ']
 
     for letter in sample_word:
       try:
-        position = letter.tolist().index(1)
+        position = letter.index(1)
         result.append(lookup[position])
       except ValueError:
         result.append(' ')
     result.append(' ')
 
-    print final_output[3]
+    # print final_output[3]
     predicted_word = final_output[idx]
     for letter in predicted_word:
-      print letter
-
+      # print letter
       big = max(letter)
       position = letter.tolist().index(big)
-      print "sdfsfdsfsdfdsfsdf"
+      # print "sdfsfdsfsdfdsfsdf"
       print position
       if big > 0.5:
         result.append(lookup[position])
@@ -308,7 +325,7 @@ def main(debug=True):
         print "Epoch {:} out of {:}".format(epoch + 1, model.n_epochs)
         model.train(session, summary_op)
         # writer.add_summary(summary, epoch)# * batch_count + i)
-        sys.exit()
+
         if epoch % 20 == 1:
           print_bar("prediction")
           test_indices = np.random.choice(50, 10, replace=False)
