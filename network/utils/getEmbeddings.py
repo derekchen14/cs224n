@@ -115,8 +115,10 @@ def minibatch(data, minibatch_idx):
 def get_batches(data, size, shuffle=True, toy=False):
     if toy:
         batchGenerator = splitToyData(data, size, shuffle)
+        statistics = {"vocab_size": 27}
     else:
         batchGenerator = splitData(data, size, shuffle)
+        statistics = 10
     # How to use:
     # for minibatch in minibatchesGen:
     #     print 'Answers in batch: ', minibatch[0]
@@ -138,6 +140,31 @@ def splitToyData(data, minibatch_size, shuffle):
         answers = [data[i] for i in np.arange(a_start, a_end)]
 
         yield [queries, answers]
+
+def embedding_to_text(test_samples, final_output):
+  lookup = list(' abcdefghijklmnopqrstuvwxyz')
+  for idx, sample_word in enumerate(test_samples):
+    result = ['Prediction ', str(idx+1), ': ']
+
+    for letter in sample_word:
+      try:
+        position = letter.index(1)
+        result.append(lookup[position])
+      except ValueError:
+        result.append(' ')
+    result.append(' ')
+
+    predicted_word = final_output[idx]
+    for letter in predicted_word:
+      big = max(letter)
+      position = letter.tolist().index(big)
+      if big > 0.5:
+        result.append(lookup[position])
+      elif big > 0.4:
+        result.append("("+lookup[position]+")")
+      else:
+        result.append('-')
+    print ''.join(result)
 
 if __name__ == '__main__':
 

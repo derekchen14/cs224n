@@ -5,31 +5,41 @@ import time
 import pickle
 import sys
 
-from utils.general import Progbar, init_generator
+from utils.general import Progbar, print_bar
 from utils.parser import minibatches
-from utils.getEmbeddings import get_batches, loader
-from tensorflow.contrib.layers import xavier_initializer
+from utils.getEmbeddings import get_batches, loader, embedding_to_text
 
+toy = True
 class Config(object):
-  n_cells = 40      # number cells units in RNN layer passed into rnn.GRUCell()
-  max_enc_len = 7       #theoretically, not needed with dynamic RNN
-  max_dec_len = 8           # purposely different from enc to easily distinguish
-  vocab_size = 27      # 26 letters of the alphabet and 1 for padding
-  embed_size = 27
-  dropout_rate = 0.9
-  n_epochs = 3
-  learning_rate = 0.001
-  initializer = "glorot" # for xavier or "normal" for truncated normal
-  batch_size = 10
+  if toy:
+    n_cells = 40      # number cells units in RNN layer passed into rnn.GRUCell()
+    max_enc_len = 7       #theoretically, not needed with dynamic RNN
+    max_dec_len = 8           # purposely different from enc to easily distinguish
+    vocab_size = 27      # 26 letters of the alphabet and 1 for padding
+    embed_size = 27
+    dropout_rate = 0.9
+    n_epochs = 3
+    learning_rate = 0.001
+    batch_size = 10
+  else:
+    n_cells = 150
+    max_enc_len = 100
+    max_dec_len = 100
+    vocab_size = 50000  # to be replaced
+    embed_size = 300
+    dropout_rate = 0.9
+    n_epochs = 3
+    learning_rate = 0.001
+    batch_size = 64
 
 class Seq2SeqModel(object):
   def add_placeholders(self):
     # (batch_size, sequence_length, embedding_dimension)
-    self.input_placeholder = tf.placeholder(tf.float32,
-        shape=(self.batch_size, 7, self.embed_size), name='question')
+    self.input_placeholder = tf.placeholder(tf.float32, name='question',
+        shape=(self.batch_size, self.max_enc_len, self.embed_size) )
     # (batch_size, sequence_length, vocab_size)
-    self.output_placeholder = tf.placeholder(tf.float32,
-        shape=(self.batch_size, 8, self.embed_size), name='answer')
+    self.output_placeholder = tf.placeholder(tf.float32, name='answer',
+        shape=(self.batch_size, self.max_dec_len, self.embed_size) )
     self.enc_seq_len = tf.placeholder(tf.int32, shape=(self.batch_size,))
     self.dec_seq_len = tf.placeholder(tf.int32, shape=(self.batch_size,))
     self.labels = tf.placeholder(tf.int32, shape=(self.batch_size, self.max_dec_len))
@@ -41,7 +51,7 @@ class Seq2SeqModel(object):
     # will not run unless there is target output_data, so we generate bunch
     # of fake data for the output and the labels
     if output_data is None:
-      output_data = np.zeros((self.batch_size, 8, self.vocab_size))
+      output_data = np.zeros((self.batch_size, self.max_dec_len, self.vocab_size))
       labels = np.zeros((self.batch_size,self.max_dec_len))
 
     feed_dict = {
@@ -67,7 +77,7 @@ class Seq2SeqModel(object):
 
   def encoder_decoder(self):
     init_state = tf.get_variable('init_state', [self.batch_size, self.n_cells],
-         initializer=tf.contrib.layers.xavier_initializer())
+         initializer=self.initializer())
 
     with tf.variable_scope("seq2seq") as scope:
       enc_cell = tf.contrib.rnn.GRUCell(self.n_cells)
@@ -102,29 +112,6 @@ class Seq2SeqModel(object):
     return pred, dec_state
 
   def add_loss_op(self, pred):
-    """Adds Ops for the loss function to the computational graph.
-    Args:
-        pred: A tensor of shape (batch_size, n_classes)
-    Returns:
-        loss: A 0-d tensor (scalar) output
-
-    """
-    # loss = tf.nn.sequence_loss(logits, self.output_placeholder, weights)
-    # (logits, targets, weights, average_across_timesteps=True,
-    #   average_across_batch=True, softmax_loss_function=None, name=None):
-
-    # idx = 10 * 8 + (7-1) = 80 + 6 = 86
-    # idx = tf.range(self.batch_size)*tf.shape(pred)[1] + (self.max_dec_len - 1)
-    # tf.reshape flattens the multi-dimensional tensor, then tf.gather grabs the
-    # final output in the list, which we call the "last_output"
-    # last_output = tf.gather(tf.reshape(pred, [-1, self.n_cells]), idx)
-    # this is another way to do the same thing
-    # last_output = tf.gather_nd(logits,
-    #     tf.pack([tf.range(50), self.max_dec_len-1], axis=1))
-    # we end up not wanting just the last element since we are making a series
-    # of predictions, rather than just a single predictions
-    # pred = tf.Print(pred, [tf.shape(pred)], first_n=3, message="before pad:") #[10, 8, 40]
-
     # for some reason, when a particular batch has sequence length less
     # than the max, the prediction are truncated to the max of that batch
     # rather than maintainingthe same length, so we
@@ -145,7 +132,7 @@ class Seq2SeqModel(object):
     # logits of shape [batch_size, seq_len, vocab_size]
     # labels of shape [batch_size, seq_len].
 
-    with tf.variable_scope('lossy', initializer=xavier_initializer()):
+    with tf.variable_scope('lossy', initializer=self.initializer()):
       flat_vocab_size = self.max_dec_len * self.vocab_size
       weight = tf.get_variable(name="W", shape=(flat_size, flat_vocab_size))
       bias = tf.get_variable(name="b", shape=(flat_vocab_size,) )
@@ -177,29 +164,33 @@ class Seq2SeqModel(object):
     tf.summary.scalar("loss", loss)
     return train_op
 
-  def predict(self, sess, test_samples):
-    lookup = list('abcdefghijklmnopqrstuvwxyz')
-    seq_len= {"enc": [np.sum(sen) for sen in test_samples],
-        "dec": [8 for sen in test_samples]}
-    _, final_output = sess.run([self.loss, self.final_output],
-        self.create_feed_dict(test_samples, None, None, seq_len) )
-    embedding_to_text(test_samples, final_output)
+  def predict(self, sess, test_samples, lookup):
+    if toy:
+      seq_len= {"enc": [np.sum(sen) for sen in test_samples],
+          "dec": [8 for sen in test_samples]}
+      _, final_output = sess.run([self.loss, self.final_output],
+          self.create_feed_dict(test_samples, None, None, seq_len) )
+      embedding_to_text(test_samples, final_output)
+    else:
+      print "To be added"
 
   def train(self, sess, summary_op):
-    allBatches = get_batches(self.all_data, self.batch_size, False, True)
+    allBatches = get_batches(self.all_data, self.batch_size, False, toy=True)
     prog = Progbar(target=(len(self.all_data)/2) / self.batch_size)
     fetches = [self.train_op, self.loss, summary_op]    # array of desired outputs
 
     for i, batch in enumerate(allBatches):
-      questions, answers = batch[0], batch[1]
-      enc_seq_len = [np.sum(sen) for sen in questions]
-      dec_seq_len = [np.sum(sen) for sen in answers]
-      seq_len = {"enc": enc_seq_len, "dec": dec_seq_len}
-      labels = []
-      for word in answers:
-        label = [letter.index(1) for letter in word]
-        labels.append(label)
-      labels = np.asarray(labels)
+      if toy:
+        questions, answers = batch[0], batch[1]
+        enc_seq_len = [np.sum(sen) for sen in questions]
+        dec_seq_len = [np.sum(sen) for sen in answers]
+        seq_len = {"enc": enc_seq_len, "dec": dec_seq_len}
+        labels = [ [letter.index(1) for letter in word] for word in answers]
+        labels = np.asarray(labels)
+      else:
+        questions, answers = batch["questions"], batch["answers"]
+        seq_len = {"enc": batch["enc"], "dec": batch["dec"]}
+        labels = batch["labels"]
 
       feed_dict = self.create_feed_dict(questions, answers, labels, seq_len)
       _, loss, summary = sess.run(fetches, feed_dict)
@@ -212,77 +203,80 @@ class Seq2SeqModel(object):
     self.loss, self.final_output = self.add_loss_op(self.pred)
     self.train_op = self.add_training_op(self.loss)
 
-  def __init__(self, config, training_data):
+  def __init__(self, config, training_data, statistics):
     self.n_cells = config.n_cells
-    self.max_enc_len = config.max_enc_len
-    self.max_dec_len = config.max_dec_len
     self.embed_size = config.embed_size
-    self.vocab_size = config.vocab_size
     self.n_epochs = config.n_epochs
     self.lr = config.learning_rate
-    self.initializer = config.initializer
     self.dropout_rate = config.dropout_rate
-    self.all_data = training_data
     self.batch_size = config.batch_size
+    self.all_data = training_data
+    self.initializer = tf.contrib.layers.xavier_initializer
+
+    if toy:
+      self.max_enc_len = config.max_enc_len
+      self.max_dec_len = config.max_dec_len
+      self.vocab_size = config.vocab_size
+    else:
+      self.max_enc_len = statistics.max_enc_len
+      self.max_dec_len = statistics.max_dec_len
+      self.vocab_size = statistics.vocab_size
+
     self.build()
-
-def embedding_to_text(test_samples, final_output):
-  lookup = list(' abcdefghijklmnopqrstuvwxyz')
-  for idx, sample_word in enumerate(test_samples):
-    result = ['Prediction ', str(idx+1), ': ']
-
-    for letter in sample_word:
-      try:
-        position = letter.index(1)
-        result.append(lookup[position])
-      except ValueError:
-        result.append(' ')
-    result.append(' ')
-
-    predicted_word = final_output[idx]
-    for letter in predicted_word:
-      big = max(letter)
-      position = letter.tolist().index(big)
-      if big > 0.5:
-        result.append(lookup[position])
-      elif big > 0.4:
-        result.append("("+lookup[position]+")")
-      else:
-        result.append('-')
-    print ''.join(result)
-
-def print_bar(stage):
-  print 80 * "="
-  print stage.upper()
-  print 80 * "="
 
 def main(debug=True):
   config = Config()
-  all_data = pickle.load(open("dirty/toy_data/toy_embeddings.pkl", "rb"))
+  if toy:
+    training_data = pickle.load(open("dirty/toy_data/toy_embeddings.pkl", "rb"))
+    test_indices = np.random.choice(50, 10, replace=False)
+    test_data = [training_data[i] for i in test_indices]
+    lookup = list('abcdefghijklmnopqrstuvwxyz')
+  else:
+    all_data = utils.loader(False)
+    training_data = all_data["training_data"]
+    test_data = all_data["test_data"]
+    statistics = all_data["statistics"]
+    lookup = all_data["embedding_matrix"]
 
   with tf.Graph().as_default():
     print "Building model...",
     start = time.time()
-    model = Seq2SeqModel(config, all_data)
-    print "took {:.2f} seconds\n".format(time.time() - start)
-    # saver = None if debug else tf.train.Saver()
+    model = Seq2SeqModel(config, training_data, statistics=None)
+    print "Model Built! Took {:.2f} seconds\n".format(time.time() - start)
 
     with tf.Session() as session:
       session.run(tf.global_variables_initializer())
       summary_op = tf.summary.merge_all()
+      # saver = None if debug else tf.train.Saver()
 
       print_bar("training")
       for epoch in range(model.n_epochs):
-        logs_path = '/tmp/tensorflow/board'       # Tensorboard. Run: tensorboard --logdir=run1:/tmp/tensorflow/board --port 6006
-        writer = tf.summary.FileWriter(logs_path, graph=tf.get_default_graph())
         print "Epoch {:} out of {:}".format(epoch + 1, model.n_epochs)
         model.train(session, summary_op)
-        # writer.add_summary(summary, epoch)# * batch_count + i)
 
       print_bar("prediction")
-      test_indices = np.random.choice(50, 10, replace=False)
-      test_samples = [all_data[i] for i in test_indices]
-      predictions = model.predict(session, test_samples)
+      predictions = model.predict(session, test_data, lookup)
 
 if __name__ == '__main__':
     main()
+
+    # logs_path = '/tmp/tensorflow/board'
+    # writer = tf.summary.FileWriter(logs_path, graph=tf.get_default_graph())
+    # Tensorboard. Run: tensorboard --logdir=run1:/tmp/tensorflow/board --port 6006
+    # writer.add_summary(summary, epoch)# * batch_count + i)
+
+    # loss = tf.nn.sequence_loss(logits, self.output_placeholder, weights)
+    # (logits, targets, weights, average_across_timesteps=True,
+    #   average_across_batch=True, softmax_loss_function=None, name=None):
+
+    # idx = 10 * 8 + (7-1) = 80 + 6 = 86
+    # idx = tf.range(self.batch_size)*tf.shape(pred)[1] + (self.max_dec_len - 1)
+    # tf.reshape flattens the multi-dimensional tensor, then tf.gather grabs the
+    # final output in the list, which we call the "last_output"
+    # last_output = tf.gather(tf.reshape(pred, [-1, self.n_cells]), idx)
+    # this is another way to do the same thing
+    # last_output = tf.gather_nd(logits,
+    #     tf.pack([tf.range(50), self.max_dec_len-1], axis=1))
+    # we end up not wanting just the last element since we are making a series
+    # of predictions, rather than just a single predictions
+    # pred = tf.Print(pred, [tf.shape(pred)], first_n=3, message="before pad:") #[10, 8, 40]

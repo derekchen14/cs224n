@@ -40,6 +40,10 @@ def get_minibatches(data, minibatch_size, shuffle=True):
         yield [minibatch(d, minibatch_indices) for d in data] if list_data \
             else minibatch(data, minibatch_indices)
 
+def print_bar(stage):
+  print 80 * "="
+  print stage.upper()
+  print 80 * "="
 
 def minibatch(data, minibatch_idx):
     return data[minibatch_idx] if type(data) is np.ndarray else [data[i] for i in minibatch_idx]
