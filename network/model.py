@@ -10,17 +10,13 @@ from utils.parser import minibatches
 from utils.getEmbeddings import get_batches, loader
 from tensorflow.contrib.layers import xavier_initializer
 
-
 class Config(object):
-  n_cells = 40      # number cells units in RNN layer
-                    # passed into rnn.GRUCell() or rnn. LSTMCell
+  n_cells = 40      # number cells units in RNN layer passed into rnn.GRUCell()
   max_enc_len = 7       #theoretically, not needed with dynamic RNN
   max_dec_len = 8           # purposely different from enc to easily distinguish
   vocab_size = 27      # 26 letters of the alphabet and 1 for padding
-                        # 0 stands for padding, 1-26 stands for A-Z
   embed_size = 27
-  # dropout = 0.5
-  # batch_size = 202
+  dropout_rate = 0.9
   n_epochs = 3
   learning_rate = 0.001
   initializer = "glorot" # for xavier or "normal" for truncated normal
@@ -37,7 +33,7 @@ class Seq2SeqModel(object):
     self.enc_seq_len = tf.placeholder(tf.int32, shape=(self.batch_size,))
     self.dec_seq_len = tf.placeholder(tf.int32, shape=(self.batch_size,))
     self.labels = tf.placeholder(tf.int32, shape=(self.batch_size, self.max_dec_len))
-    # self.dropout_placeholder = tf.placeholder(tf.float32, shape=())
+    self.dropout_placeholder = tf.placeholder(tf.float32, shape=())
 
   def create_feed_dict(self, input_data, output_data, labels, sequence_length):
     # When output_data is None, that means we are in inference mode making
@@ -53,8 +49,9 @@ class Seq2SeqModel(object):
       self.output_placeholder: output_data,
       self.enc_seq_len: sequence_length["enc"],
       self.dec_seq_len: sequence_length["dec"],
-      self.labels: labels
-    }    # self.dropout_placeholder: dropout
+      self.labels: labels,
+      self.dropout_placeholder: self.dropout_rate
+    }
 
     return feed_dict
 
@@ -76,7 +73,7 @@ class Seq2SeqModel(object):
       enc_cell = tf.contrib.rnn.GRUCell(self.n_cells)
       dec_cell = tf.contrib.rnn.GRUCell(self.n_cells)
 
-      # Encoder (sequence_length )
+      # Encoder
       _, enc_state = tf.nn.dynamic_rnn(enc_cell,
           self.input_placeholder, sequence_length=self.enc_seq_len,
           initial_state=init_state, dtype=tf.float32)
@@ -94,7 +91,6 @@ class Seq2SeqModel(object):
               dec_cell, decoder_fn=decoder_fn,
               inputs=self.output_placeholder, sequence_length=self.dec_seq_len)
       elif self.stage is "inference":
-        # enc_state = tf.Print(enc_state, ["came here"])
         with tf.variable_scope("decoder"):
           pred, _, _ = tf.contrib.seq2seq.dynamic_rnn_decoder(dec_cell,
               decoder_fn=decoder_fn, inputs=None, sequence_length=self.dec_seq_len)
@@ -102,9 +98,6 @@ class Seq2SeqModel(object):
           pred, dec_state, _ = tf.contrib.seq2seq.dynamic_rnn_decoder(
               dec_cell, decoder_fn=decoder_fn, inputs=None,
               sequence_length=self.dec_seq_len)
-
-    # print pred.shape
-    # pred = tf.Print(pred, [pred.shape], message="Pred shape:")
 
     return pred, dec_state
 
@@ -170,12 +163,6 @@ class Seq2SeqModel(object):
     # tf.summary.histogram("biasLossy",bias)
     # tf.summary.histogram("logitsLossy", logits)
 
-    # dataToDisplay = [logits[4]] #, tf.shape(logits)]
-    # logits = tf.Print(logits, dataToDisplay, summarize=26)
-    # preds = tf.nn.softmax(logits)
-    # correct = tf.equal(tf.cast(tf.argmax(preds,1),tf.int32), y)
-    # accuracy = tf.reduce_mean(tf.cast(correct, tf.float32))
-    # final_output = 3
     # we don't pass in the final_output here since the loss function
     # already includes the softmax calculation inside
     cross_entropy_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
@@ -185,14 +172,8 @@ class Seq2SeqModel(object):
     return loss, final_output
 
   def add_training_op(self, loss):
-    """Sets up the training Ops.
-    Args: loss: Loss tensor, from cross_entropy_loss.
-    Returns: train_op: The Op for training.
-    """
-
     optimizer = tf.train.AdamOptimizer(self.lr)
     train_op = optimizer.minimize(loss)
-    # tensorboard.
     tf.summary.scalar("loss", loss)
     return train_op
 
@@ -202,9 +183,6 @@ class Seq2SeqModel(object):
         "dec": [8 for sen in test_samples]}
     _, final_output = sess.run([self.loss, self.final_output],
         self.create_feed_dict(test_samples, None, None, seq_len) )
-    # print len(final_output)
-    # print final_output.shape
-    # print "sdfdsfffff"
     embedding_to_text(test_samples, final_output)
 
   def train(self, sess, summary_op):
@@ -216,19 +194,16 @@ class Seq2SeqModel(object):
       questions, answers = batch[0], batch[1]
       enc_seq_len = [np.sum(sen) for sen in questions]
       dec_seq_len = [np.sum(sen) for sen in answers]
-
+      seq_len = {"enc": enc_seq_len, "dec": dec_seq_len}
       labels = []
       for word in answers:
         label = [letter.index(1) for letter in word]
         labels.append(label)
-
       labels = np.asarray(labels)
-      seq_len = {"enc": enc_seq_len, "dec": dec_seq_len}
-      feed_dict = self.create_feed_dict(questions, answers, labels, seq_len)     # dictionary of inputs
 
+      feed_dict = self.create_feed_dict(questions, answers, labels, seq_len)
       _, loss, summary = sess.run(fetches, feed_dict)
       prog.update(i + 1, [("train loss", loss)])
-
     # return summary
 
   def build(self):
@@ -246,15 +221,10 @@ class Seq2SeqModel(object):
     self.n_epochs = config.n_epochs
     self.lr = config.learning_rate
     self.initializer = config.initializer
-
-    # self.pretrained_embeddings = pretrained_embeddings
+    self.dropout_rate = config.dropout_rate
     self.all_data = training_data
-    # self.questions = np.asarray(training_data[:50])
     self.batch_size = config.batch_size
-
-    # self.n_examples = training_data["questions"].shape[0]
     self.build()
-
 
 def embedding_to_text(test_samples, final_output):
   lookup = list(' abcdefghijklmnopqrstuvwxyz')
@@ -269,14 +239,10 @@ def embedding_to_text(test_samples, final_output):
         result.append(' ')
     result.append(' ')
 
-    # print final_output[3]
     predicted_word = final_output[idx]
     for letter in predicted_word:
-      # print letter
       big = max(letter)
       position = letter.tolist().index(big)
-      # print "sdfsfdsfsdfdsfsdf"
-      # print position
       if big > 0.5:
         result.append(lookup[position])
       elif big > 0.4:
@@ -284,7 +250,6 @@ def embedding_to_text(test_samples, final_output):
       else:
         result.append('-')
     print ''.join(result)
-
 
 def print_bar(stage):
   print 80 * "="
@@ -294,11 +259,6 @@ def print_bar(stage):
 def main(debug=True):
   config = Config()
   all_data = pickle.load(open("dirty/toy_data/toy_embeddings.pkl", "rb"))
-
-  # test_indices = np.random.choice(50, 10, replace=False)
-  # test_samples = [all_data[i] for i in test_indices]
-  # encoder_sequence_length = {"enc": [np.sum(sen) for sen in test_samples]}
-  # print encoder_sequence_length
 
   with tf.Graph().as_default():
     print "Building model...",
@@ -319,7 +279,6 @@ def main(debug=True):
         model.train(session, summary_op)
         # writer.add_summary(summary, epoch)# * batch_count + i)
 
-    # if epoch % 20 == 0:
       print_bar("prediction")
       test_indices = np.random.choice(50, 10, replace=False)
       test_samples = [all_data[i] for i in test_indices]
