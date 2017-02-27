@@ -12,13 +12,13 @@ from utils.getEmbeddings import get_batches, loader, embedding_to_text
 toy = True
 class Config(object):
   if toy:
-    n_cells = 50      # number cells units in RNN layer passed into rnn.GRUCell()
+    n_cells = 90      # number cells units in RNN layer passed into rnn.GRUCell()
     max_enc_len = 7       # theoretically, not needed with dynamic RNN
-    max_dec_len = 9       # purposely different from enc to easily distinguish
-    vocab_size = 28      # 26 letters of the alphabet
-    embed_size = 28      # +1 for padding, + 1 for <EOW>
+    max_dec_len = 10       # purposely different from enc to easily distinguish
+    vocab_size = 29      # 26 letters of the alphabet
+    embed_size = 29      # +1 for padding, + 1 for <EOW>
     dropout_rate = 1.0
-    n_epochs = 301
+    n_epochs = 30
     learning_rate = 0.001
     batch_size = 10
   else:
@@ -76,55 +76,60 @@ class Seq2SeqModel(object):
   # up anywhere, that was a trick question.
 
   def encoder_decoder(self):
-    init_state = tf.get_variable('init_state', [self.batch_size, self.n_cells],
-         initializer=self.initializer())
 
     with tf.variable_scope("seq2seq") as scope:
+      # Encoder
       enc_cell = tf.contrib.rnn.GRUCell(self.n_cells)
       enc_cell = tf.contrib.rnn.DropoutWrapper(cell=enc_cell,
         output_keep_prob=self.dropout_rate)  # Important: RNN version of Dropout!
-      # enc_cell = tf.contrib.rnn.MultiRNNCell(cells=[cell] * 3)
-      dec_cell = tf.contrib.rnn.GRUCell(self.n_cells)
+      enc_init = tf.get_variable('init_state', [self.batch_size, self.n_cells],
+         initializer=self.initializer())
+      with tf.variable_scope("encoder"):
+        _, enc_state = tf.nn.dynamic_rnn(enc_cell,
+            self.input_placeholder, sequence_length=self.enc_seq_len,
+            initial_state=enc_init, dtype=tf.float32)
 
-      # Encoder
-      _, enc_state = tf.nn.dynamic_rnn(enc_cell,
-          self.input_placeholder, sequence_length=self.enc_seq_len,
-          initial_state=init_state, dtype=tf.float32)
-      # Intermediate decoder function
-      decoder_fn = tf.contrib.seq2seq.simple_decoder_fn_train(enc_state)
       # Decoder
-      stage = "inference" if self.labels is None else "fitting"
-      if stage is "fitting":
-        with tf.variable_scope("decoder"):
-          pred, _, _ = tf.contrib.seq2seq.dynamic_rnn_decoder(
-              dec_cell, decoder_fn=decoder_fn,
-              inputs=self.output_placeholder, sequence_length=self.dec_seq_len)
-        with tf.variable_scope("decoder", reuse=True):
-          pred, dec_state, _ = tf.contrib.seq2seq.dynamic_rnn_decoder(
-              dec_cell, decoder_fn=decoder_fn,
-              inputs=self.output_placeholder, sequence_length=self.dec_seq_len)
-      elif self.stage is "inference":
-        with tf.variable_scope("decoder"):
-          pred, _, _ = tf.contrib.seq2seq.dynamic_rnn_decoder(dec_cell,
-              decoder_fn=decoder_fn, inputs=None, sequence_length=self.dec_seq_len)
-        with tf.variable_scope("decoder", reuse=True):
-          pred, dec_state, _ = tf.contrib.seq2seq.dynamic_rnn_decoder(
-              dec_cell, decoder_fn=decoder_fn, inputs=None,
-              sequence_length=self.dec_seq_len)
+      dec_stage = "inference" if self.labels is None else "training"
+      dec_cell = tf.contrib.rnn.GRUCell(self.n_cells)
+      dec_function = self.decoder_components(dec_stage, "function", enc_state)
+      dec_inputs = self.decoder_components(dec_stage, "inputs", None)
+      dec_seq_len = self.decoder_components(dec_stage, "sequence_length", None)
+      with tf.variable_scope("decoder"):
+        pred, _, _ = tf.contrib.seq2seq.dynamic_rnn_decoder(dec_cell,
+          dec_function, inputs=dec_inputs, sequence_length=dec_seq_len)
+      with tf.variable_scope("decoder", reuse=True):
+        pred, dec_state, _ = tf.contrib.seq2seq.dynamic_rnn_decoder(dec_cell,
+          dec_function, inputs=dec_inputs, sequence_length=dec_seq_len)
 
     return pred, dec_state
+
+  def decoder_components(self, stage, component_name, enc_state):
+    if stage is "training":
+      components = { "inputs": self.output_placeholder,
+        "function": tf.contrib.seq2seq.simple_decoder_fn_train(enc_state),
+        "sequence_length": self.dec_seq_len }
+    elif stage is "inference":
+      output_fn, SOS_id, EOS_id = None, 27, 28
+      components = { "inputs": None,
+        "function": tf.contrib.seq2seq.simple_decoder_fn_inference(output_fn,
+            enc_state, self.embedding_matrix, SOS_id, EOS_id,
+            maximum_length=self.max_dec_len, num_decoder_symbols=self.vocab_size),
+        "sequence_length": None }
+    return components[component_name]
 
   def add_loss_op(self, pred):
     # for some reason, when a particular batch has sequence length less
     # than the max, the prediction are truncated to the max of that batch
     # rather than maintainingthe same length, so we
     # add in those as zeros appended to the end of the tensor
-    diff = self.max_dec_len - tf.shape(pred)[1]
+    # diff = self.max_dec_len - tf.shape(pred)[1]
+    # diff = tf.Print(diff, [diff])
     # paddings is [   [dim1 before, dim1 after],
     #                 [dim2 before, dim2 after],
     #                 [dim3 before, dim3 after]   ]
-    paddings = [[0,0], [0,diff], [0,0]]
-    pred = tf.pad(pred, paddings, mode='CONSTANT', name="pad")
+    # paddings = [[0,0], [0,diff], [0,0]]
+    # pred = tf.pad(pred, paddings, mode='CONSTANT', name="pad")
 
     flat_size = self.max_dec_len * self.n_cells
     flattened_preds = tf.reshape(pred, [self.batch_size, flat_size])
@@ -176,7 +181,7 @@ class Seq2SeqModel(object):
 
   def train(self, sess, summary_op):
     allBatches = get_batches(self.all_data, self.batch_size, False, toy=True)
-    # prog = Progbar(target=(len(self.all_data)/2) / self.batch_size)
+    prog = Progbar(target=(len(self.all_data)/2) / self.batch_size)
     fetches = [self.train_op, self.loss, summary_op]    # array of desired outputs
 
     for i, batch in enumerate(allBatches):
@@ -196,7 +201,7 @@ class Seq2SeqModel(object):
 
       feed_dict = self.create_feed_dict(questions, answers, labels, seq_len)
       _, loss, summary = sess.run(fetches, feed_dict)
-      # prog.update(i + 1, [("train loss", loss)])
+      prog.update(i + 1, [("train loss", loss)])
     # return summary
 
   def build(self):
@@ -223,6 +228,7 @@ class Seq2SeqModel(object):
       self.max_enc_len = statistics.max_enc_len
       self.max_dec_len = statistics.max_dec_len
       self.vocab_size = statistics.vocab_size
+    self.embedding_matrix = statistics["embedding_matrix"]
 
     self.build()
 
@@ -235,22 +241,23 @@ def get_sequence_length(batch):
 def main(debug=True):
   config = Config()
   if toy:
-    training_data = pickle.load(open("dirty/toy_data/toy_embeddings_new.pkl", "rb"))
+    training_data = pickle.load(open("dirty/toy_data/toy_embeddings.pkl", "rb"))
     test_indices = np.random.choice(50, 10, replace=False)
     # test_indices = range(30,40)
     test_data = [training_data[i] for i in test_indices]
-    lookup = list(' abcdefghijklmnopqrstuvwxyz ')
+    lookup = list(' abcdefghijklmnopqrstuvwxyz |')
+    statistics = {"embedding_matrix": np.eye(config.vocab_size)}
   else:
     all_data = utils.loader(False)
     training_data = all_data["training_data"]
     test_data = all_data["test_data"]
     statistics = all_data["statistics"]
-    lookup = all_data["embedding_matrix"]
+    lookup = None
 
   with tf.Graph().as_default():
     print "Building model...",
     start = time.time()
-    model = Seq2SeqModel(config, training_data, statistics=None)
+    model = Seq2SeqModel(config, training_data, statistics)
     print "Model Built! Took {:.2f} seconds\n".format(time.time() - start)
 
     with tf.Session() as session:
@@ -260,12 +267,12 @@ def main(debug=True):
 
       print_bar("training")
       for epoch in range(model.n_epochs):
+        print "Epoch {:} out of {:}".format(epoch + 1, model.n_epochs)
         model.train(session, summary_op)
 
-        if epoch%40 == 0:
-          print "Epoch {:} out of {:}".format(epoch + 1, model.n_epochs)
-          # print_bar("prediction")
-          predictions = model.predict(session, test_data, lookup)
+        # if epoch%40 == 0:
+      print_bar("prediction")
+      predictions = model.predict(session, test_data, lookup)
 
 if __name__ == '__main__':
     # training_data = pickle.load(open("dirty/toy_data/toy_embeddings_new.pkl", "rb"))

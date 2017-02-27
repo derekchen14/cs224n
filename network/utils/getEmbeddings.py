@@ -151,7 +151,6 @@ def embedding_to_text(test_samples, final_output, lookup):
         result.append(lookup[position])
       except ValueError:
         result.append(' ')
-    result.append(' ')
 
     predicted_word = final_output[idx]
     for letter in predicted_word:
