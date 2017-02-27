@@ -8,6 +8,7 @@ import sys
 from utils.general import Progbar, print_bar
 from utils.parser import minibatches
 from utils.getEmbeddings import get_batches, loader, embedding_to_text
+from tensorflow.contrib import seq2seq
 
 toy = True
 class Config(object):
@@ -19,7 +20,7 @@ class Config(object):
     vocab_size = 29      # 26 letters of the alphabet
     embed_size = 29      # +1 for padding, + 1 for <EOW>
     dropout_rate = 0.8
-    n_epochs = 3201
+    n_epochs = 321
     learning_rate = 0.001
     batch_size = 10
   else:
@@ -97,50 +98,55 @@ class Seq2SeqModel(object):
       dec_inputs = self.decoder_components(dec_stage, "inputs", None)
       dec_seq_len = self.decoder_components(dec_stage, "sequence_length", None)
       with tf.variable_scope("decoder"):
-        pred, _, _ = tf.contrib.seq2seq.dynamic_rnn_decoder(dec_cell,
-          dec_function, inputs=dec_inputs, sequence_length=dec_seq_len)
+        pred, _, _ = seq2seq.dynamic_rnn_decoder(dec_cell, dec_function,
+          inputs=dec_inputs, sequence_length=dec_seq_len)
       with tf.variable_scope("decoder", reuse=True):
-        pred, dec_state, _ = tf.contrib.seq2seq.dynamic_rnn_decoder(dec_cell,
-          dec_function, inputs=dec_inputs, sequence_length=dec_seq_len)
+        pred, dec_state, _ = seq2seq.dynamic_rnn_decoder(dec_cell, dec_function,
+          inputs=dec_inputs, sequence_length=dec_seq_len)
 
     return pred, dec_state
 
-  def decoder_components(self, stage, component_name, enc_state):
-    if stage is "training":
-      components = { "inputs": self.output_placeholder,
-        "function": tf.contrib.seq2seq.simple_decoder_fn_train(enc_state),
-        "sequence_length": self.dec_seq_len }
-    elif stage is "inference":
-      output_fn, SOS_id, EOS_id = None, 27, 28
-      components = { "inputs": None,
-        "function": tf.contrib.seq2seq.simple_decoder_fn_inference(output_fn,
-            enc_state, self.embedding_matrix, SOS_id, EOS_id,
-            maximum_length=self.max_dec_len, num_decoder_symbols=self.vocab_size),
-        "sequence_length": None }
-    if self.use_attention:
-      components["function"] = self.attention(stage, enc_state)
-    return components[component_name]
-
-  def attention(self, stage, enc_state):
   """ Args:
-    attention_states,  # hidden states to attend over
-    attention_option, #or "bahdanau"
+    attention_states: hidden states to attend over
+    attention_option: "luong" or "bahdanau"
     num_units, reuse: whether to reuse variable scope.
   Returns:
     attention_keys: to be compared with target states.
     attention_values: to be used to construct context vectors.
     attention_score_fn: to compute similarity between key and target states.
     attention_construct_fn: to build attention states.
+
+    output_fn, encoder_state, attention_keys, attention_values,
+    attention_score_fn, attention_construct_fn, embeddings,
+    start_of_sequence_id, end_of_sequence_id, maximum_length,
+    num_decoder_symbols
   """
-    keys, values, score_fn, construct_fn = prepare_attention(None,
-      attention_option = "luong", self.n_cells, reuse=False)
+  def decoder_components(self, stage, component_name, enc_state):
     if stage is "training":
-      dec_function = attention_decoder_fn_train(enc_state, keys, values,
-          score_fn, construct_fn)
+      components = { "inputs": self.output_placeholder,
+        "sequence_length": self.dec_seq_len }
+      if self.use_attention:
+        keys, values, score_fn, construct_fn = prepare_attention(None,
+            attention_option = "luong", num_units=self.n_cells, reuse=False)
+        components["function"] = attention_decoder_fn_train(enc_state, keys,
+            values, score_fn, construct_fn)
+      else:
+        components["function"] = seq2seq.simple_decoder_fn_train(enc_state)
+
     elif stage is "inference":
-      dec_function = attention_decoder_fn_inference(enc_state, keys, values,
-          score_fn, construct_fn)
-    return dec_function
+      output_fn, SOS_id, EOS_id = None, self.SOS_id, self.EOS_id
+      components = { "inputs": None, "sequence_length": None }
+      if self.use_attention:
+        keys, values, score_fn, construct_fn = prepare_attention(None,
+            attention_option = "luong", num_units=self.n_cells, reuse=False)
+        components["function"] = attention_decoder_fn_inference(output_fn,
+            enc_state, keys, values, score_fn, construct_fn, self.embedding_matrix,
+            SOS_id, EOS_id, self.max_dec_len, self.vocab_size)
+      else:
+        components["function"] = seq2seq.simple_decoder_fn_inference(output_fn,
+            enc_state, self.embedding_matrix, SOS_id, EOS_id,
+            maximum_length=self.max_dec_len, num_decoder_symbols=self.vocab_size)
+    return components[component_name]
 
   def add_loss_op(self, pred):
     # for some reason, when a particular batch has sequence length less
@@ -251,10 +257,14 @@ class Seq2SeqModel(object):
       self.max_enc_len = config.max_enc_len
       self.max_dec_len = config.max_dec_len
       self.vocab_size = config.vocab_size
+      self.SOS_id = 27
+      self.EOS_id = 28
     else:
       self.max_enc_len = statistics.max_enc_len
       self.max_dec_len = statistics.max_dec_len
       self.vocab_size = statistics.vocab_size
+      self.SOS_id = statistics.SOS_id
+      self.EOS_id = statistics.EOS_id
 
     self.build()
 
@@ -294,7 +304,7 @@ def main(debug=True):
       for epoch in range(model.n_epochs):
         model.train(session, summary_op)
 
-        if epoch%100 == 0:
+        if epoch%40 == 0:
           print "Epoch {:} out of {:}".format(epoch + 1, model.n_epochs)
           # print_bar("prediction")
           test_indices = np.random.choice(50, 10, replace=False)
