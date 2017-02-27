@@ -141,8 +141,7 @@ def splitToyData(data, minibatch_size, shuffle):
 
         yield [queries, answers]
 
-def embedding_to_text(test_samples, final_output):
-  lookup = list(' abcdefghijklmnopqrstuvwxyz')
+def embedding_to_text(test_samples, final_output, lookup):
   for idx, sample_word in enumerate(test_samples):
     result = ['Prediction ', str(idx+1), ': ']
 
@@ -157,7 +156,11 @@ def embedding_to_text(test_samples, final_output):
     predicted_word = final_output[idx]
     for letter in predicted_word:
       big = max(letter)
-      position = letter.tolist().index(big)
+      if type(letter) == list:
+        position = letter.index(big)
+      else:
+        position = letter.tolist().index(big)
+
       if big > 0.5:
         result.append(lookup[position])
       elif big > 0.4:

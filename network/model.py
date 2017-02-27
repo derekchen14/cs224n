@@ -12,13 +12,13 @@ from utils.getEmbeddings import get_batches, loader, embedding_to_text
 toy = True
 class Config(object):
   if toy:
-    n_cells = 40      # number cells units in RNN layer passed into rnn.GRUCell()
-    max_enc_len = 7       #theoretically, not needed with dynamic RNN
-    max_dec_len = 8           # purposely different from enc to easily distinguish
-    vocab_size = 27      # 26 letters of the alphabet and 1 for padding
-    embed_size = 27
-    dropout_rate = 0.9
-    n_epochs = 141
+    n_cells = 50      # number cells units in RNN layer passed into rnn.GRUCell()
+    max_enc_len = 7       # theoretically, not needed with dynamic RNN
+    max_dec_len = 9       # purposely different from enc to easily distinguish
+    vocab_size = 28      # 26 letters of the alphabet
+    embed_size = 28      # +1 for padding, + 1 for <EOW>
+    dropout_rate = 1.0
+    n_epochs = 301
     learning_rate = 0.001
     batch_size = 10
   else:
@@ -167,23 +167,24 @@ class Seq2SeqModel(object):
   def predict(self, sess, test_samples, lookup):
     if toy:
       seq_len={"enc": get_sequence_length(test_samples),
-          "dec": [8 for sen in test_samples]}
+          "dec": [self.max_dec_len for sen in test_samples]}
       _, final_output = sess.run([self.loss, self.final_output],
           self.create_feed_dict(test_samples, None, None, seq_len) )
-      embedding_to_text(test_samples, final_output)
+      embedding_to_text(test_samples, final_output, lookup)
     else:
       print "To be added"
 
   def train(self, sess, summary_op):
     allBatches = get_batches(self.all_data, self.batch_size, False, toy=True)
-    prog = Progbar(target=(len(self.all_data)/2) / self.batch_size)
+    # prog = Progbar(target=(len(self.all_data)/2) / self.batch_size)
     fetches = [self.train_op, self.loss, summary_op]    # array of desired outputs
 
     for i, batch in enumerate(allBatches):
       if toy:
         questions, answers = batch[0], batch[1]
         enc_seq_len = get_sequence_length(questions)
-        dec_seq_len = get_sequence_length(answers)
+        dec_seq_len = [self.max_dec_len for sen in answers]
+        # get_sequence_length(answers)
         seq_len = {"enc": enc_seq_len, "dec": dec_seq_len}
         # print seq_len
         labels = [ [letter.index(1) for letter in word] for word in answers]
@@ -195,7 +196,7 @@ class Seq2SeqModel(object):
 
       feed_dict = self.create_feed_dict(questions, answers, labels, seq_len)
       _, loss, summary = sess.run(fetches, feed_dict)
-      prog.update(i + 1, [("train loss", loss)])
+      # prog.update(i + 1, [("train loss", loss)])
     # return summary
 
   def build(self):
@@ -238,7 +239,7 @@ def main(debug=True):
     test_indices = np.random.choice(50, 10, replace=False)
     # test_indices = range(30,40)
     test_data = [training_data[i] for i in test_indices]
-    lookup = list('abcdefghijklmnopqrstuvwxyz')
+    lookup = list(' abcdefghijklmnopqrstuvwxyz ')
   else:
     all_data = utils.loader(False)
     training_data = all_data["training_data"]
@@ -259,14 +260,20 @@ def main(debug=True):
 
       print_bar("training")
       for epoch in range(model.n_epochs):
-        print "Epoch {:} out of {:}".format(epoch + 1, model.n_epochs)
         model.train(session, summary_op)
 
-        if epoch%20 == 0:
+        if epoch%40 == 0:
+          print "Epoch {:} out of {:}".format(epoch + 1, model.n_epochs)
           # print_bar("prediction")
           predictions = model.predict(session, test_data, lookup)
 
 if __name__ == '__main__':
+    # training_data = pickle.load(open("dirty/toy_data/toy_embeddings_new.pkl", "rb"))
+    # test_indices = np.random.choice(50, 10, replace=False)
+    # lookup = list(' abcdefghijklmnopqrstuvwxyz ')
+    # test_data = [training_data[i] for i in test_indices]
+    # answer_data = [training_data[i+50] for i in test_indices]
+    # embedding_to_text(test_data, answer_data, lookup)
     main()
 
     # logs_path = '/tmp/tensorflow/board'
