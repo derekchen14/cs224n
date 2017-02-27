@@ -10,7 +10,7 @@ from utils.parser import minibatches
 from utils.getEmbeddings import get_batches, loader, embedding_to_text
 from tensorflow.contrib import seq2seq
 
-toy = False
+toy = True
 class Config(object):
   use_attention = False
   if toy:
@@ -289,6 +289,7 @@ def main(debug=True):
     validation_data = [training_data[i] for i in test_indices]
     lookup = list(' abcdefghijklmnopqrstuvwxyz ')
     statistics = {"embedding_matrix": np.eye(config.vocab_size)}
+    embedding_matrix = None
   else:
     loadedData = loader()
     training_data = loadedData["training_data"]
@@ -306,7 +307,7 @@ def main(debug=True):
 
     with tf.Session() as session:
       session.run(tf.global_variables_initializer())
-      # summary_op = tf.summary.merge_all()
+      summary_op = tf.summary.merge_all()
       # saver = None if debug else tf.train.Saver()
 
       print_bar("training")

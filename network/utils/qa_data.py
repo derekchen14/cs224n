@@ -128,8 +128,10 @@ def process_glove(args, vocab_list, save_path, size=4e5):
                     glove[idx, :] = vector
                 else:
                     not_found += 1
-                    vocabNotFound.append(word)
-        print("Vocabs not found in glove:")
+
+        for i, vocabWord in enumerate(vocab_list.keys()):
+            if sum(glove[i,:]) == 0:
+                vocabNotFound.append(vocabWord)
         print(vocabNotFound)
         found = size - not_found
         print("{}/{} of word vocab have corresponding vectors in {}".format(found, len(vocab_list), glove_path))
