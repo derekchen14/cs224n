@@ -231,11 +231,11 @@ class Seq2SeqModel(object):
         questions_labels, answers_labels = batch[0], batch[1]
         seq_len = {"enc": [len(q) for q in questions], "dec": [len(a) for a in answers]}
         labels = questions_labels
-        questions = self.embedding_matrix[labels]
-        print(questions)
-        answers = self.embedding_matrix[answers_labels]
-        print(answers)
+        print(questions_labels)
+        print("MADE IT HERE. CHECKPOINT. EXITTING.")
         sys.exit()
+        questions = self.embedding_matrix[labels]
+        answers = self.embedding_matrix[answers_labels]
 
       feed_dict = self.create_feed_dict(questions, answers, labels, seq_len)
       _, loss, summary = sess.run(fetches, feed_dict)
@@ -243,10 +243,12 @@ class Seq2SeqModel(object):
     # return summary
 
   def build(self):
+    print("Beginning build()")
     self.add_placeholders()
     self.pred, self.dec_state = self.encoder_decoder()
     self.loss, self.final_output = self.add_loss_op(self.pred)
     self.train_op = self.add_training_op(self.loss)
+    print("Finished build()")
 
   def __init__(self, config, training_data, embedding_matrix=None):
     self.n_cells = config.n_cells
@@ -259,16 +261,14 @@ class Seq2SeqModel(object):
 
     self.all_data = training_data
     self.initializer = tf.contrib.layers.xavier_initializer
+
+    self.max_enc_len = config.max_enc_len
+    self.max_dec_len = config.max_dec_len
+    self.vocab_size = config.vocab_size
     if toy:
-      self.max_enc_len = config.max_enc_len
-      self.max_dec_len = config.max_dec_len
-      self.vocab_size = config.vocab_size
       self.SOS_id = 27
       self.EOS_id = 28
     else:
-      self.max_enc_len = statistics.max_enc_len
-      self.max_dec_len = statistics.max_dec_len
-      self.vocab_size = statistics.vocab_size
       self.embedding_matrix = embedding_matrix
       self.SOS_id = 1
       self.EOS_id = 2
@@ -306,14 +306,14 @@ def main(debug=True):
 
     with tf.Session() as session:
       session.run(tf.global_variables_initializer())
-      summary_op = tf.summary.merge_all()
+      # summary_op = tf.summary.merge_all()
       # saver = None if debug else tf.train.Saver()
 
       print_bar("training")
       for epoch in range(model.n_epochs):
         model.train(session, summary_op)
 
-        if epoch%40 == 0:
+        if epoch%40 == 0 and toy:
           print "Epoch {:} out of {:}".format(epoch + 1, model.n_epochs)
           # print_bar("prediction")
           test_indices = np.random.choice(50, 10, replace=False)
