@@ -10,7 +10,7 @@ from utils.parser import minibatches
 from utils.getEmbeddings import get_batches, loader, embedding_to_text
 from tensorflow.contrib import seq2seq
 
-toy = True
+toy = False
 class Config(object):
   use_attention = False
   if toy:
@@ -25,10 +25,10 @@ class Config(object):
     batch_size = 10
   else:
     n_cells = 150
-    max_enc_len = 100
-    max_dec_len = 100
-    vocab_size = 50000  # to be replaced
-    embed_size = 300
+    max_enc_len = -1 # will be replaced
+    max_dec_len = -1 # will be replaced
+    vocab_size = -1  # will be replaced
+    embed_size = 50
     dropout_rate = 0.9
     n_epochs = 3
     learning_rate = 0.001
@@ -178,8 +178,8 @@ class Seq2SeqModel(object):
           [self.batch_size, self.max_dec_len, self.vocab_size])
       final_output = tf.nn.softmax(logits)
 
-    # final_output = tf.Print(final_output, [tf.shape(final_output)],
-    #     first_n=3, message="Final output shape")
+    final_output = tf.Print(final_output, [tf.shape(final_output)],
+        first_n=3, message="Final output shape")
 
     # tf.summary.histogram("WeightLossy",weight)
     # tf.summary.histogram("biasLossy",bias)
@@ -207,10 +207,11 @@ class Seq2SeqModel(object):
           self.create_feed_dict(test_samples, None, None, seq_len) )
       embedding_to_text(test_samples, final_output, lookup)
     else:
+
       print "To be added"
 
   def train(self, sess, summary_op):
-    allBatches = get_batches(self.all_data, self.batch_size, False, toy=True)
+    allBatches = get_batches(self.all_data, self.batch_size, True, toy)
     # prog = Progbar(target=(len(self.all_data)/2) / self.batch_size)
     fetches = [self.train_op, self.loss, summary_op]    # array of desired outputs
 
@@ -225,9 +226,16 @@ class Seq2SeqModel(object):
         labels = [ [letter.index(1) for letter in word] for word in answers]
         labels = np.asarray(labels)
       else:
-        questions, answers = batch["questions"], batch["answers"]
-        seq_len = {"enc": batch["enc"], "dec": batch["dec"]}
-        labels = batch["labels"]
+        # TODO: BIG. Refactor this so that we use tf.nn.embedding_lookup. 
+        # Will need to change "create_feed_dict" entirely. 
+        questions_labels, answers_labels = batch[0], batch[1]
+        seq_len = {"enc": [len(q) for q in questions], "dec": [len(a) for a in answers]}
+        labels = questions_labels
+        questions = self.embedding_matrix[labels]
+        print(questions)
+        answers = self.embedding_matrix[answers_labels]
+        print(answers)
+        sys.exit()
 
       feed_dict = self.create_feed_dict(questions, answers, labels, seq_len)
       _, loss, summary = sess.run(fetches, feed_dict)
@@ -240,7 +248,7 @@ class Seq2SeqModel(object):
     self.loss, self.final_output = self.add_loss_op(self.pred)
     self.train_op = self.add_training_op(self.loss)
 
-  def __init__(self, config, training_data, statistics):
+  def __init__(self, config, training_data, embedding_matrix=None):
     self.n_cells = config.n_cells
     self.embed_size = config.embed_size
     self.n_epochs = config.n_epochs
@@ -251,8 +259,6 @@ class Seq2SeqModel(object):
 
     self.all_data = training_data
     self.initializer = tf.contrib.layers.xavier_initializer
-    self.embedding_matrix = statistics["embedding_matrix"]
-
     if toy:
       self.max_enc_len = config.max_enc_len
       self.max_dec_len = config.max_dec_len
@@ -263,9 +269,9 @@ class Seq2SeqModel(object):
       self.max_enc_len = statistics.max_enc_len
       self.max_dec_len = statistics.max_dec_len
       self.vocab_size = statistics.vocab_size
-      self.SOS_id = statistics.SOS_id
-      self.EOS_id = statistics.EOS_id
-
+      self.embedding_matrix = embedding_matrix
+      self.SOS_id = 1
+      self.EOS_id = 2
     self.build()
 
 def get_sequence_length(batch):
@@ -279,20 +285,23 @@ def main(debug=True):
   if toy:
     training_data = pickle.load(open("dirty/toy_data/toy_embeddings.pkl", "rb"))
     test_indices = np.random.choice(50, 10, replace=False)
-    test_data = [training_data[i] for i in test_indices]
-    lookup = list(' abcdefghijklmnopqrstuvwxyz |')
+    # test_indices = range(30,40)
+    validation_data = [training_data[i] for i in test_indices]
+    lookup = list(' abcdefghijklmnopqrstuvwxyz ')
     statistics = {"embedding_matrix": np.eye(config.vocab_size)}
   else:
-    all_data = utils.loader(False)
-    training_data = all_data["training_data"]
-    test_data = all_data["test_data"]
-    statistics = all_data["statistics"]
-    lookup = None
+    loadedData = loader()
+    training_data = loadedData["training_data"]
+    validation_data = loadedData["validation_data"]
+    config.vocab_size = loadedData["vocab_size"]
+    config.max_dec_len = loadedData["max_dec_len"]
+    config.max_enc_len = loadedData["max_enc_len"]
+    embedding_matrix = loadedData["embedding_matrix"]
 
   with tf.Graph().as_default():
     print "Building model...",
     start = time.time()
-    model = Seq2SeqModel(config, training_data, statistics)
+    model = Seq2SeqModel(config, training_data, embedding_matrix)
     print "Model Built! Took {:.2f} seconds\n".format(time.time() - start)
 
     with tf.Session() as session:
@@ -308,8 +317,8 @@ def main(debug=True):
           print "Epoch {:} out of {:}".format(epoch + 1, model.n_epochs)
           # print_bar("prediction")
           test_indices = np.random.choice(50, 10, replace=False)
-          test_data = [training_data[i] for i in test_indices]
-          predictions = model.predict(session, test_data, lookup)
+          validation_data = [training_data[i] for i in test_indices]
+          predictions = model.predict(session, validation_data, lookup)
 
 if __name__ == '__main__':
     # training_data = pickle.load(open("dirty/toy_data/toy_embeddings_new.pkl", "rb"))
