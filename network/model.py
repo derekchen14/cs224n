@@ -11,14 +11,15 @@ from utils.getEmbeddings import get_batches, loader, embedding_to_text
 
 toy = True
 class Config(object):
+  use_attention = False
   if toy:
-    n_cells = 90      # number cells units in RNN layer passed into rnn.GRUCell()
+    n_cells = 150      # number cells units in RNN layer passed into rnn.GRUCell()
     max_enc_len = 7       # theoretically, not needed with dynamic RNN
     max_dec_len = 10       # purposely different from enc to easily distinguish
     vocab_size = 29      # 26 letters of the alphabet
     embed_size = 29      # +1 for padding, + 1 for <EOW>
-    dropout_rate = 1.0
-    n_epochs = 30
+    dropout_rate = 0.8
+    n_epochs = 3201
     learning_rate = 0.001
     batch_size = 10
   else:
@@ -116,7 +117,30 @@ class Seq2SeqModel(object):
             enc_state, self.embedding_matrix, SOS_id, EOS_id,
             maximum_length=self.max_dec_len, num_decoder_symbols=self.vocab_size),
         "sequence_length": None }
+    if self.use_attention:
+      components["function"] = self.attention(stage, enc_state)
     return components[component_name]
+
+  def attention(self, stage, enc_state):
+  """ Args:
+    attention_states,  # hidden states to attend over
+    attention_option, #or "bahdanau"
+    num_units, reuse: whether to reuse variable scope.
+  Returns:
+    attention_keys: to be compared with target states.
+    attention_values: to be used to construct context vectors.
+    attention_score_fn: to compute similarity between key and target states.
+    attention_construct_fn: to build attention states.
+  """
+    keys, values, score_fn, construct_fn = prepare_attention(None,
+      attention_option = "luong", self.n_cells, reuse=False)
+    if stage is "training":
+      dec_function = attention_decoder_fn_train(enc_state, keys, values,
+          score_fn, construct_fn)
+    elif stage is "inference":
+      dec_function = attention_decoder_fn_inference(enc_state, keys, values,
+          score_fn, construct_fn)
+    return dec_function
 
   def add_loss_op(self, pred):
     # for some reason, when a particular batch has sequence length less
@@ -181,7 +205,7 @@ class Seq2SeqModel(object):
 
   def train(self, sess, summary_op):
     allBatches = get_batches(self.all_data, self.batch_size, False, toy=True)
-    prog = Progbar(target=(len(self.all_data)/2) / self.batch_size)
+    # prog = Progbar(target=(len(self.all_data)/2) / self.batch_size)
     fetches = [self.train_op, self.loss, summary_op]    # array of desired outputs
 
     for i, batch in enumerate(allBatches):
@@ -201,7 +225,7 @@ class Seq2SeqModel(object):
 
       feed_dict = self.create_feed_dict(questions, answers, labels, seq_len)
       _, loss, summary = sess.run(fetches, feed_dict)
-      prog.update(i + 1, [("train loss", loss)])
+      # prog.update(i + 1, [("train loss", loss)])
     # return summary
 
   def build(self):
@@ -217,8 +241,11 @@ class Seq2SeqModel(object):
     self.lr = config.learning_rate
     self.dropout_rate = config.dropout_rate
     self.batch_size = config.batch_size
+    self.use_attention = config.use_attention
+
     self.all_data = training_data
     self.initializer = tf.contrib.layers.xavier_initializer
+    self.embedding_matrix = statistics["embedding_matrix"]
 
     if toy:
       self.max_enc_len = config.max_enc_len
@@ -228,7 +255,6 @@ class Seq2SeqModel(object):
       self.max_enc_len = statistics.max_enc_len
       self.max_dec_len = statistics.max_dec_len
       self.vocab_size = statistics.vocab_size
-    self.embedding_matrix = statistics["embedding_matrix"]
 
     self.build()
 
@@ -243,7 +269,6 @@ def main(debug=True):
   if toy:
     training_data = pickle.load(open("dirty/toy_data/toy_embeddings.pkl", "rb"))
     test_indices = np.random.choice(50, 10, replace=False)
-    # test_indices = range(30,40)
     test_data = [training_data[i] for i in test_indices]
     lookup = list(' abcdefghijklmnopqrstuvwxyz |')
     statistics = {"embedding_matrix": np.eye(config.vocab_size)}
@@ -267,12 +292,14 @@ def main(debug=True):
 
       print_bar("training")
       for epoch in range(model.n_epochs):
-        print "Epoch {:} out of {:}".format(epoch + 1, model.n_epochs)
         model.train(session, summary_op)
 
-        # if epoch%40 == 0:
-      print_bar("prediction")
-      predictions = model.predict(session, test_data, lookup)
+        if epoch%100 == 0:
+          print "Epoch {:} out of {:}".format(epoch + 1, model.n_epochs)
+          # print_bar("prediction")
+          test_indices = np.random.choice(50, 10, replace=False)
+          test_data = [training_data[i] for i in test_indices]
+          predictions = model.predict(session, test_data, lookup)
 
 if __name__ == '__main__':
     # training_data = pickle.load(open("dirty/toy_data/toy_embeddings_new.pkl", "rb"))
