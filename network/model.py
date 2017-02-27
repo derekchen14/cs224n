@@ -18,7 +18,7 @@ class Config(object):
     vocab_size = 27      # 26 letters of the alphabet and 1 for padding
     embed_size = 27
     dropout_rate = 0.9
-    n_epochs = 3
+    n_epochs = 141
     learning_rate = 0.001
     batch_size = 10
   else:
@@ -81,6 +81,9 @@ class Seq2SeqModel(object):
 
     with tf.variable_scope("seq2seq") as scope:
       enc_cell = tf.contrib.rnn.GRUCell(self.n_cells)
+      enc_cell = tf.contrib.rnn.DropoutWrapper(cell=enc_cell,
+        output_keep_prob=self.dropout_rate)  # Important: RNN version of Dropout!
+      # enc_cell = tf.contrib.rnn.MultiRNNCell(cells=[cell] * 3)
       dec_cell = tf.contrib.rnn.GRUCell(self.n_cells)
 
       # Encoder
@@ -123,15 +126,12 @@ class Seq2SeqModel(object):
     paddings = [[0,0], [0,diff], [0,0]]
     pred = tf.pad(pred, paddings, mode='CONSTANT', name="pad")
 
-    # pred = tf.Print(pred, [tf.shape(pred)], first_n=3, message="after pad:") #[10, 8, 40]
-
     flat_size = self.max_dec_len * self.n_cells
     flattened_preds = tf.reshape(pred, [self.batch_size, flat_size])
     # now the predictions are shape (10, 8*40)
 
     # logits of shape [batch_size, seq_len, vocab_size]
     # labels of shape [batch_size, seq_len].
-
     with tf.variable_scope('lossy', initializer=self.initializer()):
       flat_vocab_size = self.max_dec_len * self.vocab_size
       weight = tf.get_variable(name="W", shape=(flat_size, flat_vocab_size))
@@ -166,7 +166,7 @@ class Seq2SeqModel(object):
 
   def predict(self, sess, test_samples, lookup):
     if toy:
-      seq_len= {"enc": [np.sum(sen) for sen in test_samples],
+      seq_len={"enc": get_sequence_length(test_samples),
           "dec": [8 for sen in test_samples]}
       _, final_output = sess.run([self.loss, self.final_output],
           self.create_feed_dict(test_samples, None, None, seq_len) )
@@ -182,9 +182,10 @@ class Seq2SeqModel(object):
     for i, batch in enumerate(allBatches):
       if toy:
         questions, answers = batch[0], batch[1]
-        enc_seq_len = [np.sum(sen) for sen in questions]
-        dec_seq_len = [np.sum(sen) for sen in answers]
+        enc_seq_len = get_sequence_length(questions)
+        dec_seq_len = get_sequence_length(answers)
         seq_len = {"enc": enc_seq_len, "dec": dec_seq_len}
+        # print seq_len
         labels = [ [letter.index(1) for letter in word] for word in answers]
         labels = np.asarray(labels)
       else:
@@ -224,11 +225,18 @@ class Seq2SeqModel(object):
 
     self.build()
 
+def get_sequence_length(batch):
+  def word_seq_len(word):
+    letter_sequence_lengths = map(lambda letter: sum(letter[1:]), word)
+    return int(sum(letter_sequence_lengths))
+  return map(word_seq_len, batch)
+
 def main(debug=True):
   config = Config()
   if toy:
-    training_data = pickle.load(open("dirty/toy_data/toy_embeddings.pkl", "rb"))
+    training_data = pickle.load(open("dirty/toy_data/toy_embeddings_new.pkl", "rb"))
     test_indices = np.random.choice(50, 10, replace=False)
+    # test_indices = range(30,40)
     test_data = [training_data[i] for i in test_indices]
     lookup = list('abcdefghijklmnopqrstuvwxyz')
   else:
@@ -254,8 +262,9 @@ def main(debug=True):
         print "Epoch {:} out of {:}".format(epoch + 1, model.n_epochs)
         model.train(session, summary_op)
 
-      print_bar("prediction")
-      predictions = model.predict(session, test_data, lookup)
+        if epoch%20 == 0:
+          # print_bar("prediction")
+          predictions = model.predict(session, test_data, lookup)
 
 if __name__ == '__main__':
     main()
