@@ -36,16 +36,28 @@ class Config(object):
 
 class Seq2SeqModel(object):
   def add_placeholders(self):
-    # (batch_size, sequence_length, embedding_dimension)
-    self.input_placeholder = tf.placeholder(tf.float32, name='question',
-        shape=(self.batch_size, self.max_enc_len, self.embed_size) )
-    # (batch_size, sequence_length, vocab_size)
-    self.output_placeholder = tf.placeholder(tf.float32, name='answer',
-        shape=(self.batch_size, self.max_dec_len, self.embed_size) )
-    self.enc_seq_len = tf.placeholder(tf.int32, shape=(self.batch_size,))
-    self.dec_seq_len = tf.placeholder(tf.int32, shape=(self.batch_size,))
-    self.labels = tf.placeholder(tf.int32, shape=(self.batch_size, self.max_dec_len))
-    self.dropout_placeholder = tf.placeholder(tf.float32, shape=())
+
+    if toy:
+      # (batch_size, sequence_length, embedding_dimension)
+      self.input_placeholder = tf.placeholder(tf.float32, name='question',
+          shape=(self.batch_size, self.max_enc_len, self.embed_size) )
+      # (batch_size, sequence_length, vocab_size)
+      self.output_placeholder = tf.placeholder(tf.float32, name='answer',
+          shape=(self.batch_size, self.max_dec_len, self.embed_size) )
+      self.enc_seq_len = tf.placeholder(tf.int32, shape=(self.batch_size,))
+      self.dec_seq_len = tf.placeholder(tf.int32, shape=(self.batch_size,))
+      self.labels = tf.placeholder(tf.int32, shape=(self.batch_size, self.max_dec_len))
+      self.dropout_placeholder = tf.placeholder(tf.float32, shape=())
+    else:
+      # (batch_size, sequence_length, embedding_dimension)
+      self.question_ids = tf.placeholder(tf.float32, name='question_ids',
+          shape=(self.batch_size, self.max_enc_len, self.embed_size) )
+      # (batch_size, sequence_length, vocab_size)
+      self.answer_ids = tf.placeholder(tf.float32, name='answer_ids',
+          shape=(self.batch_size, self.max_dec_len, self.embed_size) )
+      self.enc_seq_len = tf.placeholder(tf.int32, shape=(self.batch_size,))
+      self.dec_seq_len = tf.placeholder(tf.int32, shape=(self.batch_size,))
+      self.dropout_placeholder = tf.placeholder(tf.float32, shape=())      
 
   def create_feed_dict(self, input_data, output_data, labels, sequence_length):
     # When output_data is None, that means we are in inference mode making
@@ -67,6 +79,25 @@ class Seq2SeqModel(object):
 
     return feed_dict
 
+
+  def create_feed_dict_embeddings(self, questions_labels, answers_labels, sequence_length):
+    if answers_labels is None:
+      # output_data = np.zeros((self.batch_size, self.max_dec_len, self.vocab_size))
+      answers_labels = np.zeros((self.batch_size,self.max_dec_len))
+
+    feed_dict = {
+      self.question_ids: questions_labels,
+      self.answer_ids: answers_labels,
+      self.enc_seq_len: sequence_length["enc"],
+      self.dec_seq_len: sequence_length["dec"],
+      self.dropout_placeholder: self.dropout_rate
+    }
+
+    return feed_dict
+
+
+
+
   # Sequence_length is a vector (or list) that has length equal to the batch_size
   # For example, suppose you have a 50 examples, split into 5 batches, then
   # your vector should have a length of 10. Additionally, each sentence in your
@@ -86,13 +117,25 @@ class Seq2SeqModel(object):
         output_keep_prob=self.dropout_rate)  # Important: RNN version of Dropout!
       enc_init = tf.get_variable('init_state', [self.batch_size, self.n_cells],
          initializer=self.initializer())
+
+      if not toy:
+        questions_batch_embedding = tf.nn.embedding_lookup(self.embedding_matrix, self.question_ids)
+
       with tf.variable_scope("encoder"):
-        _, enc_state = tf.nn.dynamic_rnn(enc_cell,
-            self.input_placeholder, sequence_length=self.enc_seq_len,
-            initial_state=enc_init, dtype=tf.float32)
+        if toy:
+          _, enc_state = tf.nn.dynamic_rnn(enc_cell,
+              self.input_placeholder, sequence_length=self.enc_seq_len,
+              initial_state=enc_init, dtype=tf.float32)
+        else:
+          _, enc_state = tf.nn.dynamic_rnn(enc_cell,
+              questions_batch_embedding, sequence_length=self.enc_seq_len,
+              initial_state=enc_init, dtype=tf.float32)
 
       # Decoder
-      dec_stage = "inference" if self.labels is None else "training"
+      if toy:
+        dec_stage = "inference" if self.labels is None else "training"
+      else:
+        dec_stage = "inference" if self.answer_ids is None else "training" # Weird line...
       dec_cell = tf.contrib.rnn.GRUCell(self.n_cells)
       dec_function = self.decoder_components(dec_stage, "function", enc_state)
       dec_inputs = self.decoder_components(dec_stage, "inputs", None)
@@ -103,6 +146,7 @@ class Seq2SeqModel(object):
       with tf.variable_scope("decoder", reuse=True):
         pred, dec_state, _ = seq2seq.dynamic_rnn_decoder(dec_cell, dec_function,
           inputs=dec_inputs, sequence_length=dec_seq_len)
+
 
     return pred, dec_state
 
@@ -122,9 +166,16 @@ class Seq2SeqModel(object):
     num_decoder_symbols
   """
   def decoder_components(self, stage, component_name, enc_state):
+
     if stage is "training":
-      components = { "inputs": self.output_placeholder,
-        "sequence_length": self.dec_seq_len }
+
+      if toy:
+        components = { "inputs": self.output_placeholder,
+          "sequence_length": self.dec_seq_len }
+      else:
+        answers_batch_embedding = tf.nn.embedding_lookup(self.embedding_matrix, self.answer_ids)
+        components = { "inputs": answers_batch_embedding,
+          "sequence_length": self.dec_seq_len }
       if self.use_attention:
         keys, values, score_fn, construct_fn = prepare_attention(None,
             attention_option = "luong", num_units=self.n_cells, reuse=False)
@@ -145,7 +196,9 @@ class Seq2SeqModel(object):
       else:
         components["function"] = seq2seq.simple_decoder_fn_inference(output_fn,
             enc_state, self.embedding_matrix, SOS_id, EOS_id,
-            maximum_length=self.max_dec_len, num_decoder_symbols=self.vocab_size)
+              maximum_length=self.max_dec_len, num_decoder_symbols=self.vocab_size)
+
+
     return components[component_name]
 
   def add_loss_op(self, pred):
@@ -188,7 +241,7 @@ class Seq2SeqModel(object):
     # we don't pass in the final_output here since the loss function
     # already includes the softmax calculation inside
     cross_entropy_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
-        labels=self.labels, logits=logits)
+        labels=self.answer_ids, logits=logits)
     tf.summary.histogram("cross_entropy_loss", cross_entropy_loss)
     loss = tf.reduce_mean(cross_entropy_loss)
     return loss, final_output
@@ -207,7 +260,6 @@ class Seq2SeqModel(object):
           self.create_feed_dict(test_samples, None, None, seq_len) )
       embedding_to_text(test_samples, final_output, lookup)
     else:
-
       print "To be added"
 
   def train(self, sess, summary_op):
@@ -225,19 +277,15 @@ class Seq2SeqModel(object):
         # print seq_len
         labels = [ [letter.index(1) for letter in word] for word in answers]
         labels = np.asarray(labels)
-      else:
-        # TODO: BIG. Refactor this so that we use tf.nn.embedding_lookup. 
-        # Will need to change "create_feed_dict" entirely. 
-        questions_labels, answers_labels = batch[0], batch[1]
-        seq_len = {"enc": [len(q) for q in questions], "dec": [len(a) for a in answers]}
-        labels = questions_labels
-        print(questions_labels)
-        print("MADE IT HERE. CHECKPOINT. EXITTING.")
-        sys.exit()
-        questions = self.embedding_matrix[labels]
-        answers = self.embedding_matrix[answers_labels]
+        feed_dict = self.create_feed_dict(questions, answers, labels, seq_len)
 
-      feed_dict = self.create_feed_dict(questions, answers, labels, seq_len)
+      else:
+        questions_labels, answers_labels = batch[0], batch[1]
+        labels = answers_labels
+        seq_len = {"enc": [len(q) for q in questions_labels], "dec": [len(a) for a in answers_labels]}
+        feed_dict = self.create_feed_dict_embeddings(questions_labels, answers_labels, seq_len)
+
+
       _, loss, summary = sess.run(fetches, feed_dict)
       # prog.update(i + 1, [("train loss", loss)])
     # return summary
@@ -269,7 +317,7 @@ class Seq2SeqModel(object):
       self.SOS_id = 27
       self.EOS_id = 28
     else:
-      self.embedding_matrix = embedding_matrix
+      self.embedding_matrix = tf.constant(embedding_matrix)
       self.SOS_id = 1
       self.EOS_id = 2
     self.build()
@@ -306,9 +354,16 @@ def main(debug=True):
     print "Model Built! Took {:.2f} seconds\n".format(time.time() - start)
 
     with tf.Session() as session:
-      session.run(tf.global_variables_initializer())
+      print("DSFSDFSDFSDFSD")
+      varInitializer = tf.global_variables_initializer()
+      print("DSFSDFSDFSDFSD")
+      session.run(varInitializer)
+      print("DSFSDFSDFSDFSfdsfsdfD")
+
       summary_op = tf.summary.merge_all()
       # saver = None if debug else tf.train.Saver()
+      print("DSFSDFSDFSDFSfdsfsdffdsfdsfsdD")
+
 
       print_bar("training")
       for epoch in range(model.n_epochs):

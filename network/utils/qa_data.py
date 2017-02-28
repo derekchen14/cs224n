@@ -129,7 +129,7 @@ def process_glove(args, vocab_list, save_path, size=4e5):
                 else:
                     not_found += 1
 
-        for i, vocabWord in enumerate(vocab_list.keys()):
+        for i, vocabWord in enumerate(vocab_list):
             if sum(glove[i,:]) == 0:
                 vocabNotFound.append(vocabWord)
         print(vocabNotFound)
