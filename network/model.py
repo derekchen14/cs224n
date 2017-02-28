@@ -10,7 +10,7 @@ from utils.parser import minibatches
 from utils.getEmbeddings import get_batches, loader, embedding_to_text
 from tensorflow.contrib import seq2seq
 
-toy = True
+toy = False
 class Config(object):
   use_attention = False
   if toy:
@@ -30,7 +30,7 @@ class Config(object):
     vocab_size = -1  # will be replaced
     embed_size = 50
     dropout_rate = 0.9
-    n_epochs = 3
+    n_epochs = 300
     learning_rate = 0.001
     batch_size = 64
 
@@ -49,12 +49,10 @@ class Seq2SeqModel(object):
       self.labels = tf.placeholder(tf.int32, shape=(self.batch_size, self.max_dec_len))
       self.dropout_placeholder = tf.placeholder(tf.float32, shape=())
     else:
-      # (batch_size, sequence_length, embedding_dimension)
-      self.question_ids = tf.placeholder(tf.float32, name='question_ids',
-          shape=(self.batch_size, self.max_enc_len, self.embed_size) )
-      # (batch_size, sequence_length, vocab_size)
-      self.answer_ids = tf.placeholder(tf.float32, name='answer_ids',
-          shape=(self.batch_size, self.max_dec_len, self.embed_size) )
+      self.question_ids = tf.placeholder(tf.int32, name='question_ids',
+          shape=(self.batch_size, self.max_enc_len) )
+      self.answer_ids = tf.placeholder(tf.int32, name='answer_ids',
+          shape=(self.batch_size, self.max_dec_len) )
       self.enc_seq_len = tf.placeholder(tf.int32, shape=(self.batch_size,))
       self.dec_seq_len = tf.placeholder(tf.int32, shape=(self.batch_size,))
       self.dropout_placeholder = tf.placeholder(tf.float32, shape=())      
@@ -94,8 +92,6 @@ class Seq2SeqModel(object):
     }
 
     return feed_dict
-
-
 
 
   # Sequence_length is a vector (or list) that has length equal to the batch_size
@@ -147,7 +143,6 @@ class Seq2SeqModel(object):
         pred, dec_state, _ = seq2seq.dynamic_rnn_decoder(dec_cell, dec_function,
           inputs=dec_inputs, sequence_length=dec_seq_len)
 
-
     return pred, dec_state
 
   """ Args:
@@ -198,7 +193,6 @@ class Seq2SeqModel(object):
             enc_state, self.embedding_matrix, SOS_id, EOS_id,
               maximum_length=self.max_dec_len, num_decoder_symbols=self.vocab_size)
 
-
     return components[component_name]
 
   def add_loss_op(self, pred):
@@ -206,13 +200,13 @@ class Seq2SeqModel(object):
     # than the max, the prediction are truncated to the max of that batch
     # rather than maintainingthe same length, so we
     # add in those as zeros appended to the end of the tensor
-    # diff = self.max_dec_len - tf.shape(pred)[1]
-    # diff = tf.Print(diff, [diff])
+    diff = self.max_dec_len - tf.shape(pred)[1]
+    diff = tf.Print(diff, [diff])
     # paddings is [   [dim1 before, dim1 after],
     #                 [dim2 before, dim2 after],
     #                 [dim3 before, dim3 after]   ]
-    # paddings = [[0,0], [0,diff], [0,0]]
-    # pred = tf.pad(pred, paddings, mode='CONSTANT', name="pad")
+    paddings = [[0,0], [0,diff], [0,0]]
+    pred = tf.pad(pred, paddings, mode='CONSTANT', name="pad")
 
     flat_size = self.max_dec_len * self.n_cells
     flattened_preds = tf.reshape(pred, [self.batch_size, flat_size])
@@ -240,8 +234,12 @@ class Seq2SeqModel(object):
 
     # we don't pass in the final_output here since the loss function
     # already includes the softmax calculation inside
-    cross_entropy_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
-        labels=self.answer_ids, logits=logits)
+    if toy:
+      cross_entropy_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
+          labels=self.labels, logits=logits)
+    else:
+      cross_entropy_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
+          labels=self.answer_ids, logits=logits)
     tf.summary.histogram("cross_entropy_loss", cross_entropy_loss)
     loss = tf.reduce_mean(cross_entropy_loss)
     return loss, final_output
@@ -253,14 +251,20 @@ class Seq2SeqModel(object):
     return train_op
 
   def predict(self, sess, test_samples, lookup):
-    if toy:
-      seq_len={"enc": get_sequence_length(test_samples),
-          "dec": [self.max_dec_len for sen in test_samples]}
-      _, final_output = sess.run([self.loss, self.final_output],
-          self.create_feed_dict(test_samples, None, None, seq_len) )
-      embedding_to_text(test_samples, final_output, lookup)
-    else:
-      print "To be added"
+    seq_len={"enc": get_sequence_length(test_samples),
+        "dec": [self.max_dec_len for sen in test_samples]}
+    _, final_output = sess.run([self.loss, self.final_output],
+        self.create_feed_dict(test_samples, None, None, seq_len) )
+    embedding_to_text(test_samples, final_output, lookup)
+
+  def predict_with_embeddings(self, sess, sampleValidationQuestions, lookup, sampleValidationAnswers):
+    seq_len={"enc": [len(s) for s in sampleValidationQuestions],
+        "dec": [self.max_dec_len for s in sampleValidationQuestions]}
+    sampleValidationQuestions = [self.addPaddingEnc(q) for q in sampleValidationQuestions]
+    sampleValidationAnswers = [self.addPaddingDec(a) for a in sampleValidationAnswers]
+    feed_dict = self.create_feed_dict_embeddings(sampleValidationQuestions, None, seq_len)
+    _, final_output = sess.run([self.loss, self.final_output], feed_dict)
+    self.word_embedding_to_text(sampleValidationQuestions, final_output, lookup, sampleValidationAnswers)
 
   def train(self, sess, summary_op):
     allBatches = get_batches(self.all_data, self.batch_size, True, toy)
@@ -278,17 +282,54 @@ class Seq2SeqModel(object):
         labels = [ [letter.index(1) for letter in word] for word in answers]
         labels = np.asarray(labels)
         feed_dict = self.create_feed_dict(questions, answers, labels, seq_len)
-
       else:
         questions_labels, answers_labels = batch[0], batch[1]
-        labels = answers_labels
         seq_len = {"enc": [len(q) for q in questions_labels], "dec": [len(a) for a in answers_labels]}
+        # Pad them to be of particular size.
+        questions_labels = [self.addPaddingEnc(q) for q in questions_labels]
+        answers_labels = [self.addPaddingDec(a) for a in answers_labels]
         feed_dict = self.create_feed_dict_embeddings(questions_labels, answers_labels, seq_len)
 
-
       _, loss, summary = sess.run(fetches, feed_dict)
+      print("train loss: ", loss)
       # prog.update(i + 1, [("train loss", loss)])
     # return summary
+
+  def addPaddingEnc(self, q):
+    assert self.max_enc_len >= len(q)+2, '%s,%s. Error somewhere in preparation of data. '%(q, self.max_enc_len)
+    paddedQ = np.lib.pad(q, (1,self.max_enc_len+1-(len(q)+2)), 'constant', constant_values=(self.SOS_id, self.EOS_id))
+    return paddedQ
+  def addPaddingDec(self, a):
+    assert self.max_dec_len >= len(a)+2, '%s,%s. Error somewhere in preparation of data.'%(a, self.max_dec_len)
+    paddedA = np.lib.pad(a, (1,self.max_dec_len+1-(len(a)+2)), 'constant', constant_values=(self.SOS_id, self.EOS_id))
+    return paddedA
+
+  def word_embedding_to_text(self, sampleValidationQuestions, final_output, lookup, sampleValidationAnswers):
+    # Final output            --> [batch_size, max_dec_len, vocab_size]
+    # sampleValidationAnswers --> [batch_size, max_dec_len]
+    # sampleValidationQuestions-> [batch_size, max_enc_len]
+    # lookup                  --> [vocab_size]
+
+    for b in range(self.batch_size):
+      questionAsked = []
+      for w in range(self.max_enc_len):
+        questionAsked.append(lookup[sampleValidationQuestions[b][w]])
+      expectedAnswer = []
+      for w in range(self.max_dec_len):
+        expectedAnswer.append(lookup[sampleValidationAnswers[b][w]]) 
+      givenAnswer = []
+      for w in range(self.max_dec_len):
+        maxConf = max(final_output[b][w])
+        if maxConf > 0.001:
+          givenAnswer.append(lookup[list(final_output[b][w]).index(maxConf)])
+        else:
+          givenAnswer.append('--')
+      print('\n')
+      print("questionAsked: %s" % questionAsked)
+      print("expectedAnswer: %s" % expectedAnswer)
+      print("givenAnswer: %s" % givenAnswer)
+      print('\n')
+
 
   def build(self):
     print("Beginning build()")
@@ -317,10 +358,11 @@ class Seq2SeqModel(object):
       self.SOS_id = 27
       self.EOS_id = 28
     else:
-      self.embedding_matrix = tf.constant(embedding_matrix)
+      self.embedding_matrix = tf.constant(embedding_matrix, tf.float32)
       self.SOS_id = 1
       self.EOS_id = 2
     self.build()
+
 
 def get_sequence_length(batch):
   def word_seq_len(word):
@@ -346,6 +388,7 @@ def main(debug=True):
     config.max_dec_len = loadedData["max_dec_len"]
     config.max_enc_len = loadedData["max_enc_len"]
     embedding_matrix = loadedData["embedding_matrix"]
+    lookup = loadedData["vocabs_list"]
 
   with tf.Graph().as_default():
     print "Building model...",
@@ -354,16 +397,11 @@ def main(debug=True):
     print "Model Built! Took {:.2f} seconds\n".format(time.time() - start)
 
     with tf.Session() as session:
-      print("DSFSDFSDFSDFSD")
       varInitializer = tf.global_variables_initializer()
-      print("DSFSDFSDFSDFSD")
       session.run(varInitializer)
-      print("DSFSDFSDFSDFSfdsfsdfD")
 
       summary_op = tf.summary.merge_all()
       # saver = None if debug else tf.train.Saver()
-      print("DSFSDFSDFSDFSfdsfsdffdsfdsfsdD")
-
 
       print_bar("training")
       for epoch in range(model.n_epochs):
@@ -375,6 +413,15 @@ def main(debug=True):
           test_indices = np.random.choice(50, 10, replace=False)
           validation_data = [training_data[i] for i in test_indices]
           predictions = model.predict(session, validation_data, lookup)
+        if epoch%1 == 0 and not toy:
+          print "Epoch {:} out of {:}".format(epoch + 1, model.n_epochs)
+          # print_bar("prediction")
+          test_indices = np.random.choice(len(validation_data[0]), config.batch_size, replace=False)
+          sampleValidationQuestions = [validation_data[0][i] for i in test_indices]
+          sampleValidationAnswers = [validation_data[1][i] for i in test_indices]          
+          predictions = model.predict_with_embeddings(session, sampleValidationQuestions, lookup, sampleValidationAnswers)
+
+          
 
 if __name__ == '__main__':
     # training_data = pickle.load(open("dirty/toy_data/toy_embeddings_new.pkl", "rb"))
