@@ -7,7 +7,6 @@ import numpy as np
 import pickle
 
 
-
 def loadQAPairs():
     print "Reading csv files."
     data = []
@@ -29,6 +28,11 @@ lengthAll = len(allQs)
 lengthTest = int(float(lengthAll) * 0.1)
 lengthValidation = int(float(lengthAll) * 0.2)
 lengthTrain = lengthAll - lengthTest - lengthValidation
+
+# OVERWRITE:
+lengthTrain = 12800
+lengthValidation = 2560
+lengthTest = lengthAll - lengthTrain - lengthValidation
 
 trainIndexes = np.random.choice(lengthAll, lengthTrain,replace=False)
 trainQuestions= [allQs[i] for i in trainIndexes]
