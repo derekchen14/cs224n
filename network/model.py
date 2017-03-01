@@ -55,7 +55,7 @@ class Seq2SeqModel(object):
           shape=(self.batch_size, self.max_dec_len) )
       self.enc_seq_len = tf.placeholder(tf.int32, shape=(self.batch_size,))
       self.dec_seq_len = tf.placeholder(tf.int32, shape=(self.batch_size,))
-      self.dropout_placeholder = tf.placeholder(tf.float32, shape=())      
+      self.dropout_placeholder = tf.placeholder(tf.float32, shape=())
 
   def create_feed_dict(self, input_data, output_data, labels, sequence_length):
     # When output_data is None, that means we are in inference mode making
@@ -143,7 +143,7 @@ class Seq2SeqModel(object):
         pred, dec_state, _ = seq2seq.dynamic_rnn_decoder(dec_cell, dec_function,
           inputs=dec_inputs, sequence_length=dec_seq_len)
 
-    return pred, dec_state
+    return pred, dec_stage # not state
 
   """ Args:
     attention_states: hidden states to attend over
@@ -195,7 +195,7 @@ class Seq2SeqModel(object):
 
     return components[component_name]
 
-  def add_loss_op(self, pred):
+  def add_loss_op(self, pred, stage):
     # for some reason, when a particular batch has sequence length less
     # than the max, the prediction are truncated to the max of that batch
     # rather than maintainingthe same length, so we
@@ -223,7 +223,10 @@ class Seq2SeqModel(object):
       # logits should have shape (10, 8, 26)
       logits = tf.reshape(flat_logits,
           [self.batch_size, self.max_dec_len, self.vocab_size])
-      final_output = tf.nn.softmax(logits)
+      if stage is "inference":
+        final_output = tf.nn.softmax(logits)
+      else:
+        final_output = [2,3,4]
 
     final_output = tf.Print(final_output, [tf.shape(final_output)],
         first_n=3, message="Final output shape")
@@ -268,10 +271,13 @@ class Seq2SeqModel(object):
 
   def train(self, sess, summary_op):
     allBatches = get_batches(self.all_data, self.batch_size, True, toy)
-    # prog = Progbar(target=(len(self.all_data)/2) / self.batch_size)
+    prog = Progbar(target=(len(self.all_data)/2) / self.batch_size)
     fetches = [self.train_op, self.loss, summary_op]    # array of desired outputs
 
     for i, batch in enumerate(allBatches):
+      if i > 10:
+        break
+
       if toy:
         questions, answers = batch[0], batch[1]
         enc_seq_len = get_sequence_length(questions)
@@ -291,8 +297,7 @@ class Seq2SeqModel(object):
         feed_dict = self.create_feed_dict_embeddings(questions_labels, answers_labels, seq_len)
 
       _, loss, summary = sess.run(fetches, feed_dict)
-      print("train loss: ", loss)
-      # prog.update(i + 1, [("train loss", loss)])
+      prog.update(i + 1, [("train loss", loss)])
     # return summary
 
   def addPaddingEnc(self, q):
@@ -334,8 +339,8 @@ class Seq2SeqModel(object):
   def build(self):
     print("Beginning build()")
     self.add_placeholders()
-    self.pred, self.dec_state = self.encoder_decoder()
-    self.loss, self.final_output = self.add_loss_op(self.pred)
+    self.pred, self.stage = self.encoder_decoder()
+    self.loss, self.final_output = self.add_loss_op(self.pred, self.stage)
     self.train_op = self.add_training_op(self.loss)
     print("Finished build()")
 
@@ -418,10 +423,9 @@ def main(debug=True):
           # print_bar("prediction")
           test_indices = np.random.choice(len(validation_data[0]), config.batch_size, replace=False)
           sampleValidationQuestions = [validation_data[0][i] for i in test_indices]
-          sampleValidationAnswers = [validation_data[1][i] for i in test_indices]          
+          sampleValidationAnswers = [validation_data[1][i] for i in test_indices]
           predictions = model.predict_with_embeddings(session, sampleValidationQuestions, lookup, sampleValidationAnswers)
 
-          
 
 if __name__ == '__main__':
     # training_data = pickle.load(open("dirty/toy_data/toy_embeddings_new.pkl", "rb"))
