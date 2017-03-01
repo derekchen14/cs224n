@@ -51,12 +51,6 @@ def setup_args():
     # parser.add_argument("--max_seq_len", default=100, type=int)
     return parser.parse_args()
 
-# def basic_tokenizer(sentence):
-#     words = []
-#     for space_separated_fragment in sentence.strip().split():
-#         words.extend(re.split(" ", space_separated_fragment))
-#     return [w for w in words if w]
-
 def spacy_tokenizer(paragraph):
     # Uses spacy to parse multi-sentence paragraphs into a list of token words.
     words = []
@@ -65,12 +59,21 @@ def spacy_tokenizer(paragraph):
     def processWord(word):
         word = str(word).lower().strip()
         if 'http' in word:
-            return hyperlink
-        return word
-
+            return [hyperlink]
+        # Don't clean these!
+        if word in [',', '.', '?', '!', ':', '"', '\'', '/', '[', ']', '+', '-', '--', '&', '@']:
+            return [word]
+        m = re.findall('([\w\.\,\:\%\$\']+)', word)
+        m = [w.strip('.') for w in m]
+        m = [w for w in m if w]
+        return m
+        
     doc1 = nlp(unicode(paragraph, errors='ignore'))
     for sent in doc1.sents:
+        # 2-d list.
         sentence = [processWord(word) for word in sent]
+        # flatten.
+        sentence = [word for words in sentence for word in words]
         sentence = [str(word) for word in sentence if word]
         words.extend(sentence)
         intermediate_words.append(sentence)
@@ -203,7 +206,6 @@ if __name__ == '__main__':
     validationAnswersSrc = pjoin(args.source_dir, "validationAnswers.txt")
     validationQuestionsSrc = pjoin(args.source_dir, "validationQuestions.txt")
 
-
     create_vocabulary(vocab_path,
                       [trainAnswersSrc, trainQuestionsSrc, 
                       validationAnswersSrc, validationQuestionsSrc])
@@ -232,4 +234,6 @@ if __name__ == '__main__':
     data_to_token_ids(trainAnswersSrc, y_train_ids_path, vocab_path)
     data_to_token_ids(validationQuestionsSrc, x_dis_path, vocab_path)
     data_to_token_ids(validationAnswersSrc, y_ids_path, vocab_path)
+
+    print('Done.')
 

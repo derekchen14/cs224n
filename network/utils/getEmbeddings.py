@@ -8,7 +8,7 @@ import numpy as np
 import pickle
 
 # length includes +two for padding. Useful to decrease this number when debugging.
-max_enc_dec_length = 14
+max_enc_dec_length = 60
 
 def chopEnd(listToChop, lengthToChop):
     if len(listToChop) > lengthToChop-2:
