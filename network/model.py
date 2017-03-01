@@ -275,8 +275,6 @@ class Seq2SeqModel(object):
     fetches = [self.train_op, self.loss, summary_op]    # array of desired outputs
 
     for i, batch in enumerate(allBatches):
-      if i > 10:
-        break
 
       if toy:
         questions, answers = batch[0], batch[1]
