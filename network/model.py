@@ -201,7 +201,7 @@ class Seq2SeqModel(object):
     # rather than maintainingthe same length, so we
     # add in those as zeros appended to the end of the tensor
     diff = self.max_dec_len - tf.shape(pred)[1]
-    diff = tf.Print(diff, [diff])
+    # diff = tf.Print(diff, [diff])
     # paddings is [   [dim1 before, dim1 after],
     #                 [dim2 before, dim2 after],
     #                 [dim3 before, dim3 after]   ]
@@ -226,7 +226,8 @@ class Seq2SeqModel(object):
       if stage is "inference":
         final_output = tf.nn.softmax(logits)
       else:
-        final_output = [2,3,4]
+        # final_output = [2,3,4] --> was getting this still
+        final_output = tf.nn.softmax(logits)
 
     final_output = tf.Print(final_output, [tf.shape(final_output)],
         first_n=3, message="Final output shape")
@@ -271,11 +272,16 @@ class Seq2SeqModel(object):
 
   def train(self, sess, summary_op):
     allBatches = get_batches(self.all_data, self.batch_size, True, toy)
-    prog = Progbar(target=(len(self.all_data)/2) / self.batch_size)
+    if toy:
+      prog = Progbar(target=(len(self.all_data)/2) / self.batch_size)
+    else:
+      prog = Progbar(target=(len(self.all_data[0])) / self.batch_size)
+
     fetches = [self.train_op, self.loss, summary_op]    # array of desired outputs
 
     for i, batch in enumerate(allBatches):
-
+      # if i > 10:
+      #   break
       if toy:
         questions, answers = batch[0], batch[1]
         enc_seq_len = get_sequence_length(questions)
